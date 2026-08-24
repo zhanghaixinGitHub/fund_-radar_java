@@ -1,0 +1,7 @@
+target/
+.env
+.env.local
+.idea/
+*.iml
+.tools/temurin17.zip
+.tools/jdk17/

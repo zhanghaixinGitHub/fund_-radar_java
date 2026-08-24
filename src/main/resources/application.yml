@@ -1,0 +1,37 @@
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: fund-core
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+app:
+  web:
+    allowed-origin: ${APP_WEB_ALLOWED_ORIGIN:http://localhost:5173}
+
+ai:
+  service:
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
+    token: ${AI_SERVICE_TOKEN:}
+    connect-timeout: ${AI_SERVICE_CONNECT_TIMEOUT:2s}
+    read-timeout: ${AI_SERVICE_READ_TIMEOUT:3s}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    com.fundradar.core: INFO
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"
