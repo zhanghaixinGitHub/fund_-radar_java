@@ -1,12 +1,76 @@
 package com.fundradar.core;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
+import java.util.Locale;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
+
+/**
+ * Java 核心服务的基础集成测试。
+ *
+ * 覆盖 Spring 上下文装配、提醒规则安全契约，以及禁止凭据采集和交易执行路由的 M5 安全门禁。
+ */
 @SpringBootTest
 class FundCoreApplicationTests {
 
+    @Autowired
+    private WebApplicationContext webApplicationContext;
+
+    @Autowired
+    private RequestMappingHandlerMapping requestMappingHandlerMapping;
+
+    private MockMvc mockMvc;
+
+    /** 基于完整 Spring Web 上下文初始化 MockMvc，供接口级断言复用。 */
+    @BeforeEach
+    void setUpMockMvc() {
+        mockMvc = webAppContextSetup(webApplicationContext).build();
+    }
+
+    /** 验证 Spring Boot 上下文能够成功装配。 */
     @Test
     void contextLoads() {
+    }
+
+    /** 验证非风险类提醒规则携带阈值时会被请求校验拒绝。 */
+    @Test
+    void rejectsAlertRuleThatDoesNotMeetTheSafetyContract() throws Exception {
+        mockMvc.perform(put("/api/v1/alert-rules")
+                        .contentType("application/json")
+                        .content("""
+                                {"fundCode":"000001","ruleType":"EVENT","threshold":0.5,"enabled":true}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    /** 验证公开路由中不存在凭据采集、支付或基金交易执行入口。 */
+    @Test
+    void exposesNoCredentialCaptureOrTransactionExecutionRoute() {
+        boolean unsafeRouteExists = requestMappingHandlerMapping.getHandlerMethods().keySet().stream()
+                .flatMap(mapping -> mapping.getPatternValues().stream())
+                .map(path -> path.toLowerCase(Locale.ROOT))
+                .anyMatch(path -> path.contains("alipay")
+                        || path.contains("cookie")
+                        || path.contains("password")
+                        || path.contains("captcha")
+                        || path.contains("trade")
+                        || path.contains("buy")
+                        || path.contains("sell")
+                        || path.contains("redeem")
+                        || path.contains("subscribe"));
+
+        Assertions.assertFalse(unsafeRouteExists, "M5 safety gate forbids credential-capture and transaction routes.");
     }
 }

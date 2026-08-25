@@ -13,14 +13,17 @@ mvn test
 mvn spring-boot:run
 ```
 
-项目根目录的 `.env` 已是唯一的本地运行配置，Spring Boot 会在启动时自动加载；无需复制文件或手工设置环境变量。
+项目根目录的 `.env` 是数据库和 Java → FastAPI 的本地运行配置，Spring Boot 会自动加载。Compose Redis 启用认证：启动 Java 服务时还需在当前会话或受控启动配置中提供 `FUND_REDIS_PASSWORD`（兼容 `REDIS_PASSWORD`）；密钥不写入源码、日志或接口响应。
 
-## M0 接口
+## 当前接口
 
 - `GET /api/v1/health`：Java 服务健康检查。
 - `GET /api/v1/system/ai-health`：经 Java 探测 FastAPI 内部健康接口。
 - `GET /api/v1/funds`：M0 Mock 基金列表；字段为 camelCase。
 - `GET /api/v1/funds/{fundCode}`：M0 Mock 基金详情；`dataSource=M0_MOCK` 明确表示不是实际数据。
+- `GET/POST /api/v1/watchlist`、`DELETE /api/v1/watchlist/{fundCode}`：M1 本机单用户关注；重复写入幂等并记录审计。
+
+基金列表与详情的最后成功读模型会缓存到 Redis。FastAPI 不可用时，只有命中缓存才返回 `stale=true` 和 `cachedAt`；调用方必须明确展示陈旧状态。
 
 关联文档：
 

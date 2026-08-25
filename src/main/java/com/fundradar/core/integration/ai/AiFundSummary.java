@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.LocalDate;
 
-/** Read-only fund summary returned by the internal AI service. */
+/** Python AI 内部服务返回的只读基金摘要。 */
 public record AiFundSummary(
         @JsonProperty("fund_code") String fundCode,
         @JsonProperty("fund_name") String fundName,

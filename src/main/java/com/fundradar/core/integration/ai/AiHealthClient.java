@@ -10,6 +10,11 @@ import org.springframework.web.client.RestClientException;
 
 import java.time.Instant;
 
+/**
+ * Python AI 内部服务健康探测客户端。
+ *
+ * 探测失败会转为安全的 DOWN 状态，不将连接细节、令牌或异常栈返回给浏览器。
+ */
 @Service
 public class AiHealthClient {
 
@@ -31,6 +36,7 @@ public class AiHealthClient {
                 .build();
     }
 
+    /** 调用受服务令牌保护的 Python 健康接口，并返回可公开展示的 UP 或 DOWN 状态。 */
     public AiHealthStatus checkHealth() {
         Instant checkedAt = Instant.now();
         if (properties.getToken().isBlank()) {
@@ -52,6 +58,7 @@ public class AiHealthClient {
         }
     }
 
+    /** Python 内部健康接口的最小反序列化结构，仅用于本客户端。 */
     private record AiHealthPayload(String service, String status, Instant time) {
     }
 }

@@ -3,6 +3,20 @@ spring:
     import: optional:file:.env[.properties]
   application:
     name: fund-core
+  datasource:
+    url: jdbc:postgresql://${FUND_CORE_DB_HOST:localhost}:${FUND_CORE_DB_PORT:54329}/${FUND_CORE_DB_NAME:fund_core}
+    username: ${FUND_CORE_DB_USERNAME:}
+    password: ${FUND_CORE_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  flyway:
+    enabled: true
+  data:
+    redis:
+      host: ${FUND_REDIS_HOST:localhost}
+      port: ${FUND_REDIS_PORT:6379}
+      database: ${FUND_REDIS_DATABASE:0}
+      password: ${FUND_REDIS_PASSWORD:${REDIS_PASSWORD:}}
+      timeout: ${FUND_REDIS_TIMEOUT:2s}
   lifecycle:
     timeout-per-shutdown-phase: 20s
 
@@ -20,6 +34,11 @@ ai:
     token: ${AI_SERVICE_TOKEN:}
     connect-timeout: ${AI_SERVICE_CONNECT_TIMEOUT:2s}
     read-timeout: ${AI_SERVICE_READ_TIMEOUT:3s}
+
+fund:
+  read-cache:
+    enabled: ${FUND_READ_CACHE_ENABLED:true}
+    ttl: ${FUND_READ_CACHE_TTL:15m}
 
 management:
   endpoints:

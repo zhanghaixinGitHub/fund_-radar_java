@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
-/** Cursor page returned by the internal AI service. */
+/** Python AI 内部服务返回的基金游标分页结果。 */
 public record AiFundPage(
         List<AiFundSummary> items,
         @JsonProperty("next_cursor") String nextCursor

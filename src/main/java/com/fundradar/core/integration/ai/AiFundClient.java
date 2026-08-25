@@ -12,7 +12,11 @@ import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
 
-/** Client for the M0 internal fund read-model contract. */
+/**
+ * M0 基金内部读模型客户端。
+ *
+ * 由 Java 核心服务调用受服务令牌保护的 Python 接口，浏览器不会直接访问该客户端或 Python 服务。
+ */
 @Service
 public class AiFundClient {
 
@@ -34,6 +38,11 @@ public class AiFundClient {
                 .build();
     }
 
+    /**
+     * 查询基金列表内部读模型。
+     *
+     * Python 返回 404 以外的调用失败统一转换为 AiServiceUnavailableException；空响应也视为不可用。
+     */
     public AiFundPage listFunds(String keyword, int pageSize, String cursor) {
         try {
             AiFundPage payload = restClient.get()
@@ -55,6 +64,12 @@ public class AiFundClient {
         }
     }
 
+    /**
+     * 查询单只基金内部详情。
+     *
+     * @throws FundNotFoundException Python 返回 404 时抛出，供对外异常处理器转换为 404
+     * @throws AiServiceUnavailableException Python 服务或网络异常时抛出
+     */
     public AiFundDetail getFund(String fundCode) {
         try {
             AiFundDetail payload = restClient.get()
@@ -79,6 +94,7 @@ public class AiFundClient {
         }
     }
 
+    /** 根据可选关键字和游标构造基金列表内部接口地址。 */
     private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
         if (StringUtils.hasText(keyword)) {
@@ -90,6 +106,7 @@ public class AiFundClient {
         return uriBuilder.build();
     }
 
+    /** 记录脱敏的调用上下文，并统一包装为对外可识别的服务不可用异常。 */
     private AiServiceUnavailableException unavailable(Exception exception) {
         LOGGER.error("AiFundClient.unavailable   >>> AI fund read-model request failed, baseUrl={}", properties.getBaseUrl(), exception);
         return new AiServiceUnavailableException("AI fund read-model is unavailable", exception);
