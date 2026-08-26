@@ -1,6 +1,6 @@
 # 全市场基金雷达 Java 核心服务
 
-Java 服务是前端唯一业务接口与审计边界。M0 提供健康检查和经 FastAPI 转发的 Mock 基金读模型；不连接真实基金数据、不执行交易。
+Java 服务是前端唯一业务接口与审计边界。它提供健康检查、经 FastAPI 转发的持久化基金目录读模型，以及本机单用户确认快照的只读查询；不执行交易。
 
 ## JDK
 
@@ -19,8 +19,9 @@ mvn spring-boot:run
 
 - `GET /api/v1/health`：Java 服务健康检查。
 - `GET /api/v1/system/ai-health`：经 Java 探测 FastAPI 内部健康接口。
-- `GET /api/v1/funds`：M0 Mock 基金列表；字段为 camelCase。
-- `GET /api/v1/funds/{fundCode}`：M0 Mock 基金详情；`dataSource=M0_MOCK` 明确表示不是实际数据。
+- `GET /api/v1/funds`：已持久化的基金目录样本列表；字段为 camelCase。当前仅有 6 条手工核验样本，未同步净值时 `asOfDate=null`。
+- `GET /api/v1/funds/{fundCode}`：目录详情；`navStatus=NOT_SYNCED` 明确表示没有实时或历史净值。
+- `GET /api/v1/portfolio/current`：本机当前用户的确认持仓快照；只读，日期未知时返回 `dataAsOfStatus=UNKNOWN` 与 `dataAsOfDate=null`。
 - `GET/POST /api/v1/watchlist`、`DELETE /api/v1/watchlist/{fundCode}`：M1 本机单用户关注；重复写入幂等并记录审计。
 
 基金列表与详情的最后成功读模型会缓存到 Redis。FastAPI 不可用时，只有命中缓存才返回 `stale=true` 和 `cachedAt`；调用方必须明确展示陈旧状态。
