@@ -71,7 +71,7 @@ public class InternalFundQueryService implements FundQueryService {
                         FundDetailResponse data = cached.data();
                         return new FundDetailResponse(
                                 data.fundCode(), data.fundName(), data.fundType(), data.status(), data.asOfDate(),
-                                data.navStatus(), data.dataSource(), true, cached.cachedAt()
+                                data.unitNav(), data.accumulatedNav(), data.navStatus(), data.dataSource(), true, cached.cachedAt()
                         );
                     })
                     .orElseThrow(() -> exception);
@@ -79,13 +79,15 @@ public class InternalFundQueryService implements FundQueryService {
     }
 
     /** 将 Python 内部详情转换为 Java 对外详情，并标记为实时结果。 */
-    private FundDetailResponse toDetailResponse(AiFundDetail fund) {
+    static FundDetailResponse toDetailResponse(AiFundDetail fund) {
         return new FundDetailResponse(
                 fund.fundCode(),
                 fund.fundName(),
                 fund.fundType(),
                 fund.status(),
                 fund.asOfDate(),
+                fund.unitNav(),
+                fund.accumulatedNav(),
                 fund.navStatus(),
                 fund.dataSource(),
                 false,
