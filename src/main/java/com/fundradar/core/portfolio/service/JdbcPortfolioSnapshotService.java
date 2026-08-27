@@ -1,5 +1,7 @@
 package com.fundradar.core.portfolio.service;
 
+import com.fundradar.core.auth.CurrentUserContext;
+import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.portfolio.api.PortfolioHoldingResponse;
 import com.fundradar.core.portfolio.api.PortfolioSnapshotResponse;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -10,12 +12,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
-/** 基于 JDBC 的本机单用户持仓快照只读实现。 */
+/** 基于 JDBC 的当前认证用户持仓快照只读实现。 */
 @Service
 public class JdbcPortfolioSnapshotService implements PortfolioSnapshotService {
-
-    /** 与现有关注列表保持一致的本机单用户范围；多人部署必须由认证上下文替换。 */
-    public static final UUID LOCAL_USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
 
     private final JdbcClient jdbcClient;
 
@@ -24,8 +23,20 @@ public class JdbcPortfolioSnapshotService implements PortfolioSnapshotService {
     }
 
     @Override
-    /** 按导入时间读取最新快照，再按截图金额排序读取其持仓行；不调用外部数据源。 */
+    /** 按当前认证用户和导入时间读取最新快照；不调用外部数据源。 */
     public PortfolioSnapshotResponse getCurrentUserSnapshot() {
+        UUID userId = CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_SELF_READ).userId();
+        return getSnapshot(userId);
+    }
+
+    @Override
+    /** 按指定用户和导入时间读取最新快照；权限在服务层再次校验，防止被其他调用方绕过。 */
+    public PortfolioSnapshotResponse getUserSnapshot(UUID userId) {
+        CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_USER_READ);
+        return getSnapshot(userId);
+    }
+
+    private PortfolioSnapshotResponse getSnapshot(UUID userId) {
         SnapshotRow snapshot = jdbcClient.sql("""
                         SELECT snapshot_id, source_kind, data_as_of_status, data_as_of_date, imported_at
                         FROM portfolio_snapshot
@@ -33,7 +44,7 @@ public class JdbcPortfolioSnapshotService implements PortfolioSnapshotService {
                         ORDER BY imported_at DESC, snapshot_id DESC
                         LIMIT 1
                         """)
-                .param("userId", LOCAL_USER_ID)
+                .param("userId", userId)
                 .query((row, rowNumber) -> new SnapshotRow(
                         row.getObject("snapshot_id", UUID.class),
                         row.getString("source_kind"),

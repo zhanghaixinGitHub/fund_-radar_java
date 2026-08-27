@@ -1,6 +1,10 @@
 package com.fundradar.core.common.web;
 
 import com.fundradar.core.common.api.ApiResponse;
+import com.fundradar.core.auth.service.AccessDeniedException;
+import com.fundradar.core.auth.service.AccountAlreadyExistsException;
+import com.fundradar.core.auth.service.AuthenticationRequiredException;
+import com.fundradar.core.auth.service.InvalidCredentialsException;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
 import com.fundradar.core.integration.ai.FocusedNavSyncInProgressException;
 import com.fundradar.core.integration.ai.FundNotFoundException;
@@ -51,6 +55,38 @@ public class GlobalExceptionHandler {
         LOGGER.warn("GlobalExceptionHandler.handleIllegalArgument   >>> {}", exception.getMessage());
         return ResponseEntity.badRequest()
                 .body(ApiResponse.failure("VALIDATION_ERROR", exception.getMessage()));
+    }
+
+    /** 将登录失败统一为 401，避免泄露登录名、状态或密码是否匹配。 */
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidCredentials(InvalidCredentialsException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleInvalidCredentials   >>> login rejected");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.failure("INVALID_CREDENTIALS", "手机号或密码错误。"));
+    }
+
+    /** 显式注册的重复手机号返回 409，前端可引导用户切换至登录而不写入密码或手机号日志。 */
+    @ExceptionHandler(AccountAlreadyExistsException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccountAlreadyExists(AccountAlreadyExistsException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleAccountAlreadyExists   >>> registration rejected due to existing account");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.failure("ACCOUNT_ALREADY_EXISTS", "该手机号已注册，请直接登录。"));
+    }
+
+    /** 将缺失、失效或已撤销会话统一转换为 401。 */
+    @ExceptionHandler(AuthenticationRequiredException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAuthenticationRequired(AuthenticationRequiredException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleAuthenticationRequired   >>> authentication required");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.failure("AUTHENTICATION_REQUIRED", "登录已失效，请重新登录。"));
+    }
+
+    /** 管理接口由服务端角色校验，普通用户访问时只返回稳定的 403。 */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleAccessDenied   >>> access denied");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.failure("ACCESS_DENIED", "你没有执行该操作的权限。"));
     }
 
     /** 将 Python AI 内部读模型不可用转换为 503，不泄露底层连接或令牌信息。 */

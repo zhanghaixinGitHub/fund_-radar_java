@@ -1,5 +1,7 @@
 package com.fundradar.core.alert.controller;
 
+import com.fundradar.core.auth.CurrentUserContext;
+import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.alert.api.AlertRuleResponse;
 import com.fundradar.core.alert.api.UpsertAlertRuleRequest;
 import com.fundradar.core.alert.service.AlertRuleService;
@@ -34,12 +36,14 @@ public class AlertRuleController {
     /** 查询当前本地用户的全部提醒规则。 */
     @GetMapping
     public ApiResponse<List<AlertRuleResponse>> listAlertRules() {
+        CurrentUserContext.requirePermission(PermissionCode.ALERT_RULE_SELF_READ);
         return ApiResponse.success(alertRuleService.listCurrentUserRules());
     }
 
     /** 按基金代码和提醒类型幂等创建或更新一条提醒规则。 */
     @PutMapping
     public ApiResponse<AlertRuleResponse> upsertAlertRule(@Valid @RequestBody UpsertAlertRuleRequest request) {
+        CurrentUserContext.requirePermission(PermissionCode.ALERT_RULE_SELF_WRITE);
         return ApiResponse.success(alertRuleService.upsertCurrentUserRule(request));
     }
 }

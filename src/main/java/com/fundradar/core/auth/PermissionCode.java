@@ -1,0 +1,19 @@
+package com.fundradar.core.auth;
+
+/** 服务端可校验的细粒度权限编码；菜单仅根据其展示，真实授权由接口与数据范围共同执行。 */
+public enum PermissionCode {
+    FUND_READ,
+    WATCHLIST_SELF_READ,
+    WATCHLIST_SELF_WRITE,
+    ALERT_RULE_SELF_READ,
+    ALERT_RULE_SELF_WRITE,
+    PORTFOLIO_SELF_READ,
+    ADMIN_DASHBOARD_VIEW,
+    SYSTEM_HEALTH_READ,
+    SYNC_JOB_READ,
+    SYNC_JOB_START,
+    USER_ACCOUNT_READ,
+    USER_ACCOUNT_MANAGE,
+    LEGACY_WATCHLIST_TRANSFER,
+    PORTFOLIO_USER_READ
+}

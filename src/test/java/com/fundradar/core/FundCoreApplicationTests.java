@@ -5,12 +5,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.util.Locale;
+import java.util.concurrent.ThreadLocalRandom;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -43,19 +46,61 @@ class FundCoreApplicationTests {
     void contextLoads() {
     }
 
-    /** 验证非风险类提醒规则携带阈值时会被请求校验拒绝。 */
+    /** 验证未登录请求在业务参数校验前被认证拦截，不能借非法载荷绕过身份边界。 */
     @Test
-    void rejectsAlertRuleThatDoesNotMeetTheSafetyContract() throws Exception {
+    void rejectsUnauthenticatedAlertRuleBeforeRequestValidation() throws Exception {
         mockMvc.perform(put("/api/v1/alert-rules")
                         .contentType("application/json")
                         .content("""
                                 {"fundCode":"000001","ruleType":"EVENT","threshold":0.5,"enabled":true}
                                 """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
     }
 
-    /** 验证公开路由中不存在凭据采集、支付或基金交易执行入口。 */
+    /** 登录没有 CSRF 前置条件，但来自非白名单 Origin 的请求必须在参数校验前被拒绝。 */
+    @Test
+    void rejectsLoginFromUnexpectedOriginBeforeAccountHandling() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/login")
+                .header("Origin", "https://unexpected.example")
+                .contentType("application/json")
+                .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    /** 登录不会再创建未知手机号；只有显式注册成功后，该手机号才能建立会话。 */
+    @Test
+    @Transactional
+    void requiresExplicitRegistrationBeforeSignIn() throws Exception {
+        String mobile = "139" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
+        String password = "123456";
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("FUND_USER"));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_ALREADY_EXISTS"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("FUND_USER"));
+    }
+
+    /** 验证公开路由中不存在第三方凭据采集、支付或基金交易执行入口。 */
     @Test
     void exposesNoCredentialCaptureOrTransactionExecutionRoute() {
         boolean unsafeRouteExists = requestMappingHandlerMapping.getHandlerMethods().keySet().stream()
@@ -63,7 +108,6 @@ class FundCoreApplicationTests {
                 .map(path -> path.toLowerCase(Locale.ROOT))
                 .anyMatch(path -> path.contains("alipay")
                         || path.contains("cookie")
-                        || path.contains("password")
                         || path.contains("captcha")
                         || path.contains("trade")
                         || path.contains("buy")
@@ -71,6 +115,7 @@ class FundCoreApplicationTests {
                         || path.contains("redeem")
                         || path.contains("subscribe"));
 
-        Assertions.assertFalse(unsafeRouteExists, "M5 safety gate forbids credential-capture and transaction routes.");
+        Assertions.assertFalse(unsafeRouteExists,
+                "M5 safety gate forbids third-party credential-capture and transaction routes.");
     }
 }

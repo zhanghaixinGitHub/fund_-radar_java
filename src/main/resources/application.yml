@@ -27,6 +27,12 @@ server:
 app:
   web:
     allowed-origin: ${APP_WEB_ALLOWED_ORIGIN:http://localhost:5173}
+  auth:
+    session-ttl: ${FUND_AUTH_SESSION_TTL:8h}
+    cookie-secure: ${FUND_AUTH_COOKIE_SECURE:false}
+    initial-admin-mobile: ${FUND_AUTH_INITIAL_ADMIN_MOBILE:13811112222}
+    initial-admin-password: ${FUND_AUTH_INITIAL_ADMIN_PASSWORD:a34144363.}
+    initial-admin-display-name: ${FUND_AUTH_INITIAL_ADMIN_DISPLAY_NAME:系统管理员}
 
 ai:
   service:

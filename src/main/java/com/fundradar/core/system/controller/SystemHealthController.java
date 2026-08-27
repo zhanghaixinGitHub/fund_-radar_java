@@ -1,5 +1,7 @@
 package com.fundradar.core.system.controller;
 
+import com.fundradar.core.auth.CurrentUserContext;
+import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.integration.ai.AiHealthClient;
 import com.fundradar.core.integration.ai.AiHealthStatus;
@@ -34,6 +36,7 @@ public class SystemHealthController {
     /** 返回 Java 核心服务自身可用状态，供浏览器页面的基础连通性检查使用。 */
     @GetMapping("/health")
     public ApiResponse<CoreHealthResponse> getCoreHealth() {
+        CurrentUserContext.requirePermission(PermissionCode.SYSTEM_HEALTH_READ);
         LOGGER.info("SystemHealthController.getCoreHealth   >>> core health requested");
         return ApiResponse.success(new CoreHealthResponse("fund-core", "UP", Instant.now()));
     }
@@ -41,6 +44,7 @@ public class SystemHealthController {
     /** 探测 Python AI 内部服务的可达性，并将探测结果转换为安全的公开状态。 */
     @GetMapping("/system/ai-health")
     public ApiResponse<AiHealthStatus> getAiHealth() {
+        CurrentUserContext.requirePermission(PermissionCode.SYSTEM_HEALTH_READ);
         LOGGER.info("SystemHealthController.getAiHealth   >>> AI health requested");
         return ApiResponse.success(aiHealthClient.checkHealth());
     }

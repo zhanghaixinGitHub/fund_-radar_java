@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fundradar.core.common.trace.TraceContext;
-import com.fundradar.core.portfolio.service.JdbcPortfolioSnapshotService;
+import com.fundradar.core.auth.LegacyAccount;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -27,7 +27,7 @@ import java.util.UUID;
 public class LocalPortfolioSnapshotImporter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(LocalPortfolioSnapshotImporter.class);
-    private static final String LOCAL_ACTOR = "local-user";
+    private static final String LEGACY_IMPORT_ACTOR = "legacy-local-import";
     private static final String USER_CONFIRMED_SCREENSHOT = "USER_CONFIRMED_SCREENSHOT";
     private static final String UNKNOWN = "UNKNOWN";
     private static final String KNOWN = "KNOWN";
@@ -64,7 +64,7 @@ public class LocalPortfolioSnapshotImporter {
                         ON CONFLICT (user_id, source_content_hash) DO NOTHING
                         """)
                 .param("snapshotId", snapshotId)
-                .param("userId", JdbcPortfolioSnapshotService.LOCAL_USER_ID)
+                .param("userId", LegacyAccount.USER_ID)
                 .param("sourceKind", input.sourceKind())
                 .param("dataAsOfDate", input.dataAsOfDate())
                 .param("dataAsOfStatus", input.dataAsOfStatus())
@@ -78,7 +78,7 @@ public class LocalPortfolioSnapshotImporter {
                                 FROM portfolio_snapshot
                                 WHERE user_id = :userId AND source_content_hash = :sourceContentHash
                                 """)
-                        .param("userId", JdbcPortfolioSnapshotService.LOCAL_USER_ID)
+                        .param("userId", LegacyAccount.USER_ID)
                         .param("sourceContentHash", contentHash)
                         .query(UUID.class)
                         .single();
@@ -193,7 +193,7 @@ public class LocalPortfolioSnapshotImporter {
                         """)
                 .param("auditId", UUID.randomUUID())
                 .param("traceId", TraceContext.getTraceId())
-                .param("actor", LOCAL_ACTOR)
+                .param("actor", LEGACY_IMPORT_ACTOR)
                 .param("action", action)
                 .param("targetId", snapshotId.toString())
                 .update();

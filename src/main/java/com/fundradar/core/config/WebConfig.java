@@ -1,8 +1,10 @@
 package com.fundradar.core.config;
 
 import com.fundradar.core.common.web.TraceIdFilter;
+import com.fundradar.core.auth.web.AuthWebInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
@@ -14,9 +16,11 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final WebCorsProperties webCorsProperties;
+    private final AuthWebInterceptor authWebInterceptor;
 
-    public WebConfig(WebCorsProperties webCorsProperties) {
+    public WebConfig(WebCorsProperties webCorsProperties, AuthWebInterceptor authWebInterceptor) {
         this.webCorsProperties = webCorsProperties;
+        this.authWebInterceptor = authWebInterceptor;
     }
 
     /** 按配置的单一来源地址开放对外 API 所需的方法和请求头。 */
@@ -25,7 +29,15 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addMapping("/api/**")
                 .allowedOrigins(webCorsProperties.getAllowedOrigin())
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("Content-Type", TraceIdFilter.REQUEST_ID_HEADER)
-                .exposedHeaders(TraceIdFilter.TRACE_ID_HEADER);
+                .allowedHeaders("Content-Type", TraceIdFilter.REQUEST_ID_HEADER, AuthWebInterceptor.CSRF_HEADER)
+                .exposedHeaders(TraceIdFilter.TRACE_ID_HEADER)
+                .allowCredentials(true);
+    }
+
+    /** 对所有业务 API 建立服务端认证边界；登录与注册是仅有的匿名账户入口。 */
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(authWebInterceptor)
+                .addPathPatterns("/api/v1/**");
     }
 }

@@ -1,5 +1,7 @@
 package com.fundradar.core.fund.controller;
 
+import com.fundradar.core.auth.CurrentUserContext;
+import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
@@ -61,6 +63,7 @@ public class FundController {
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) @Min(1) @Max(10_000) Integer page
     ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         String normalizedCursor = cursor == null || cursor.isBlank() ? null : cursor;
         if (page != null && normalizedCursor != null) {
             throw new IllegalArgumentException("page 与 cursor 不能同时使用。");
@@ -71,6 +74,7 @@ public class FundController {
     /** 查询指定六位基金代码的详情；AI 服务不可用时可安全降级为缓存结果。 */
     @GetMapping("/{fundCode}")
     public ApiResponse<FundDetailResponse> getFund(@PathVariable @Size(min = 6, max = 6) String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundQueryService.getFund(fundCode));
     }
 
@@ -81,6 +85,7 @@ public class FundController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
     ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         if (endDate.isBefore(startDate)) {
             throw new IllegalArgumentException("结束日期不得早于开始日期。");
         }
@@ -97,6 +102,7 @@ public class FundController {
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
             @RequestParam(required = false) String cursor
     ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundEventQueryService.listEvents(fundCode, pageSize, cursor));
     }
 
@@ -107,6 +113,7 @@ public class FundController {
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
             @RequestParam(required = false) String cursor
     ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundSignalQueryService.listSignals(fundCode, pageSize, cursor));
     }
 }

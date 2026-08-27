@@ -1,5 +1,7 @@
 package com.fundradar.core.sync.controller;
 
+import com.fundradar.core.auth.CurrentUserContext;
+import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.sync.api.SyncJobResponse;
 import com.fundradar.core.sync.service.SyncJobService;
@@ -33,6 +35,7 @@ public class SyncJobController {
     /** 创建重点基金日净值增量任务，立即返回任务标识；实际执行在 Python 后台进行。 */
     @PostMapping("/focused-nav-incremental")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startFocusedNavIncremental() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.success(syncJobService.startFocusedNavIncremental()));
     }
@@ -40,12 +43,14 @@ public class SyncJobController {
     /** 查询当前 Python 进程最近一次重点基金同步任务；无任务时 data 为 null。 */
     @GetMapping("/focused-nav-incremental/latest")
     public ApiResponse<SyncJobResponse> getLatestFocusedNavIncremental() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
         return ApiResponse.success(syncJobService.getLatestFocusedNavIncremental());
     }
 
     /** 查询指定任务的阶段、当前基金、进度及完成后写入统计。 */
     @GetMapping("/{jobId}")
     public ApiResponse<SyncJobResponse> getSyncJob(@PathVariable UUID jobId) {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
         return ApiResponse.success(syncJobService.getSyncJob(jobId));
     }
 }
