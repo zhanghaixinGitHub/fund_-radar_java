@@ -42,10 +42,10 @@ public class AiFundClient {
      *
      * Python 返回 404 以外的调用失败统一转换为 AiServiceUnavailableException；空响应也视为不可用。
      */
-    public AiFundPage listFunds(String keyword, int pageSize, String cursor) {
+    public AiFundPage listFunds(String keyword, int pageSize, String cursor, Integer page) {
         try {
             AiFundPage payload = restClient.get()
-                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, pageSize, cursor))
+                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, pageSize, cursor, page))
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()
@@ -118,14 +118,17 @@ public class AiFundClient {
         }
     }
 
-    /** 根据可选关键字和游标构造基金列表内部接口地址。 */
-    private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor) {
+    /** 根据可选关键字、游标或页码构造基金列表内部接口地址。 */
+    private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor, Integer page) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
         if (StringUtils.hasText(keyword)) {
             uriBuilder.queryParam("keyword", keyword);
         }
         if (StringUtils.hasText(cursor)) {
             uriBuilder.queryParam("cursor", cursor);
+        }
+        if (page != null) {
+            uriBuilder.queryParam("page", page);
         }
         return uriBuilder.build();
     }

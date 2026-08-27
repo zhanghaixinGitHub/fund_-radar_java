@@ -38,23 +38,25 @@ public class InternalFundQueryService implements FundQueryService {
 
     @Override
     /** 查询基金分页；无缓存的 AI 服务异常会继续抛出，不能伪造列表结果。 */
-    public FundPageResponse listFunds(String keyword, int pageSize, String cursor) {
+    public FundPageResponse listFunds(String keyword, int pageSize, String cursor, Integer page) {
         try {
-            AiFundPage page = aiFundClient.listFunds(keyword, pageSize, cursor);
-            FundPageResponse response = new FundPageResponse(
-                    page.items().stream().map(this::toSummaryResponse).toList(),
-                    page.nextCursor(),
-                    false,
-                    null
-            );
-            fundReadCache.savePage(keyword, pageSize, cursor, response);
+            AiFundPage responsePage = aiFundClient.listFunds(keyword, pageSize, cursor, page);
+            FundPageResponse response = toPageResponse(responsePage);
+            fundReadCache.savePage(keyword, pageSize, cursor, page, response);
             return response;
         } catch (AiServiceUnavailableException exception) {
-            return fundReadCache.findPage(keyword, pageSize, cursor)
+            return fundReadCache.findPage(keyword, pageSize, cursor, page)
                     .map(cached -> {
                         LOGGER.warn("InternalFundQueryService.listFunds   >>> serving stale fund page from cache");
                         return new FundPageResponse(
-                                cached.data().items(), cached.data().nextCursor(), true, cached.cachedAt()
+                                cached.data().items(),
+                                cached.data().nextCursor(),
+                                cached.data().page(),
+                                cached.data().pageSize(),
+                                cached.data().totalCount(),
+                                cached.data().totalPages(),
+                                true,
+                                cached.cachedAt()
                         );
                     })
                     .orElseThrow(() -> exception);
@@ -134,8 +136,22 @@ public class InternalFundQueryService implements FundQueryService {
         );
     }
 
+    /** 将 Python 内部分页契约转换为浏览器使用的页码和总数契约。 */
+    static FundPageResponse toPageResponse(AiFundPage page) {
+        return new FundPageResponse(
+                page.items().stream().map(InternalFundQueryService::toSummaryResponse).toList(),
+                page.nextCursor(),
+                page.page(),
+                page.pageSize(),
+                page.totalCount(),
+                page.totalPages(),
+                false,
+                null
+        );
+    }
+
     /** 将 Python 内部摘要转换为 Java 对外列表项。 */
-    private FundSummaryResponse toSummaryResponse(AiFundSummary fund) {
+    private static FundSummaryResponse toSummaryResponse(AiFundSummary fund) {
         return new FundSummaryResponse(
                 fund.fundCode(),
                 fund.fundName(),

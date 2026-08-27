@@ -2,9 +2,12 @@ package com.fundradar.core.fund.service;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
+import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.integration.ai.AiFundDetail;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundNavPoint;
+import com.fundradar.core.integration.ai.AiFundPage;
+import com.fundradar.core.integration.ai.AiFundSummary;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -52,6 +55,29 @@ class InternalFundQueryServiceTests {
         assertEquals(1, response.items().size());
         assertEquals(new BigDecimal("4.89360000"), response.items().get(0).unitNav());
         assertEquals(new BigDecimal("5.04160000"), response.items().get(0).accumulatedNav());
+        assertFalse(response.stale());
+    }
+
+    @Test
+    void mapsPageMetadataForDirectPageJump() {
+        AiFundPage source = new AiFundPage(
+                java.util.List.of(new AiFundSummary(
+                        "010710", "安信医药健康主题股票C", "STOCK", "ACTIVE", LocalDate.of(2026, 8, 26)
+                )),
+                null,
+                3,
+                10,
+                43,
+                5
+        );
+
+        FundPageResponse response = InternalFundQueryService.toPageResponse(source);
+
+        assertEquals(3, response.page());
+        assertEquals(10, response.pageSize());
+        assertEquals(43, response.totalCount());
+        assertEquals(5, response.totalPages());
+        assertEquals("010710", response.items().get(0).fundCode());
         assertFalse(response.stale());
     }
 }

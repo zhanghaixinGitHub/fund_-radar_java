@@ -50,14 +50,22 @@ public class FundController {
         this.fundSignalQueryService = fundSignalQueryService;
     }
 
-    /** 按关键字与游标查询基金列表；页大小限制在 1 到 100。 */
+    /**
+     * 按关键字查询基金列表；支持旧游标或页码模式，关联文档见
+     * docs_zhx/requirements/fund-radar.md、docs_zhx/design/fund-radar.md、docs_zhx/testcase/fund-radar.md。
+     */
     @GetMapping
     public ApiResponse<FundPageResponse> listFunds(
             @RequestParam(required = false) @Size(max = 50) String keyword,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
-            @RequestParam(required = false) String cursor
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) @Min(1) @Max(10_000) Integer page
     ) {
-        return ApiResponse.success(fundQueryService.listFunds(keyword, pageSize, cursor));
+        String normalizedCursor = cursor == null || cursor.isBlank() ? null : cursor;
+        if (page != null && normalizedCursor != null) {
+            throw new IllegalArgumentException("page 与 cursor 不能同时使用。");
+        }
+        return ApiResponse.success(fundQueryService.listFunds(keyword, pageSize, normalizedCursor, page));
     }
 
     /** 查询指定六位基金代码的详情；AI 服务不可用时可安全降级为缓存结果。 */
