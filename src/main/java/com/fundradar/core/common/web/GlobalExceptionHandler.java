@@ -2,10 +2,9 @@ package com.fundradar.core.common.web;
 
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
-import com.fundradar.core.integration.ai.FocusedNavSyncBaselineMissingException;
-import com.fundradar.core.integration.ai.FocusedNavSyncFailedException;
 import com.fundradar.core.integration.ai.FocusedNavSyncInProgressException;
 import com.fundradar.core.integration.ai.FundNotFoundException;
+import com.fundradar.core.integration.ai.SyncJobNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -70,22 +69,12 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.failure("FOCUSED_SYNC_IN_PROGRESS", "已有重点基金同步正在执行，请稍后重试。"));
     }
 
-    /** 将历史基线缺失转换为可操作的 422，不误报为同步中的冲突。 */
-    @ExceptionHandler(FocusedNavSyncBaselineMissingException.class)
-    public ResponseEntity<ApiResponse<Void>> handleFocusedNavSyncBaselineMissing(
-            FocusedNavSyncBaselineMissingException exception
-    ) {
-        LOGGER.warn("GlobalExceptionHandler.handleFocusedNavSyncBaselineMissing   >>> {}", exception.getMessage());
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
-                .body(ApiResponse.failure("FOCUSED_SYNC_BASELINE_MISSING", "请先完成重点基金历史净值回填。"));
-    }
-
-    /** 将已确认的 Tushare 同步失败转换为 502，不暴露外部响应或凭据。 */
-    @ExceptionHandler(FocusedNavSyncFailedException.class)
-    public ResponseEntity<ApiResponse<Void>> handleFocusedNavSyncFailed(FocusedNavSyncFailedException exception) {
-        LOGGER.error("GlobalExceptionHandler.handleFocusedNavSyncFailed   >>> focused NAV sync failed", exception);
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(ApiResponse.failure("FOCUSED_SYNC_FAILED", "净值同步未完成，请稍后重试。"));
+    /** Python 服务重启后内存任务不存在时，提示用户重新发起而非伪造成同步失败。 */
+    @ExceptionHandler(SyncJobNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleSyncJobNotFound(SyncJobNotFoundException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleSyncJobNotFound   >>> {}", exception.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.failure("SYNC_JOB_NOT_FOUND", "同步任务状态已失效，请重新发起同步。"));
     }
 
     /** 记录完整堆栈并将未分类异常转换为通用 500 响应。 */

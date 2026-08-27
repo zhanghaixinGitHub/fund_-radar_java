@@ -6,11 +6,9 @@ import com.fundradar.core.fund.api.FundEventPageResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
-import com.fundradar.core.fund.api.FundSyncResponse;
 import com.fundradar.core.fund.service.FundEventQueryService;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.fund.service.FundSignalQueryService;
-import com.fundradar.core.fund.service.FundSyncService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
@@ -18,7 +16,6 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,18 +39,15 @@ public class FundController {
     private final FundQueryService fundQueryService;
     private final FundEventQueryService fundEventQueryService;
     private final FundSignalQueryService fundSignalQueryService;
-    private final FundSyncService fundSyncService;
 
     public FundController(
             FundQueryService fundQueryService,
             FundEventQueryService fundEventQueryService,
-            FundSignalQueryService fundSignalQueryService,
-            FundSyncService fundSyncService
+            FundSignalQueryService fundSignalQueryService
     ) {
         this.fundQueryService = fundQueryService;
         this.fundEventQueryService = fundEventQueryService;
         this.fundSignalQueryService = fundSignalQueryService;
-        this.fundSyncService = fundSyncService;
     }
 
     /** 按关键字与游标查询基金列表；页大小限制在 1 到 100。 */
@@ -86,18 +80,6 @@ public class FundController {
             throw new IllegalArgumentException("历史净值查询窗口过大。");
         }
         return ApiResponse.success(fundQueryService.getFundNavHistory(fundCode, startDate, endDate));
-    }
-
-    /**
-     * 手动补齐六只重点基金的净值，不依赖本机 Celery Beat 或 Worker。
-     *
-     * <p>关联文档：docs_zhx/requirements/fund-radar.md；
-     * docs_zhx/design/fund-radar.md；
-     * docs_zhx/testcase/fund-radar.md。</p>
-     */
-    @PostMapping("/sync/focused-nav-incremental")
-    public ApiResponse<FundSyncResponse> syncFocusedNavIncremental() {
-        return ApiResponse.success(fundSyncService.syncFocusedNavIncremental());
     }
 
     /** 查询指定基金的已审核可追溯关联事件，不返回资讯原文。 */

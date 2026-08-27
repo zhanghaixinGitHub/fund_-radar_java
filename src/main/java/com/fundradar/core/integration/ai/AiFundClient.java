@@ -27,7 +27,6 @@ public class AiFundClient {
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
 
     private final RestClient restClient;
-    private final RestClient manualSyncRestClient;
     private final AiServiceProperties properties;
 
     public AiFundClient(RestClient.Builder restClientBuilder, AiServiceProperties properties) {
@@ -35,10 +34,6 @@ public class AiFundClient {
         this.restClient = restClientBuilder
                 .baseUrl(properties.getBaseUrl())
                 .requestFactory(createRequestFactory(properties.getReadTimeout()))
-                .build();
-        this.manualSyncRestClient = RestClient.builder()
-                .baseUrl(properties.getBaseUrl())
-                .requestFactory(createRequestFactory(properties.getManualSyncReadTimeout()))
                 .build();
     }
 
@@ -117,42 +112,6 @@ public class AiFundClient {
             }
             throw unavailable(exception);
         } catch (AiServiceUnavailableException exception) {
-            throw exception;
-        } catch (RuntimeException exception) {
-            throw unavailable(exception);
-        }
-    }
-
-    /** 手动触发 Python 的重点基金增量同步；该调用使用独立长超时，不影响正常页面读取。 */
-    public AiFocusedNavSyncResult syncFocusedNavIncremental() {
-        try {
-            AiFocusedNavSyncResult payload = manualSyncRestClient.post()
-                    .uri("/internal/v1/funds/sync/focused-nav-incremental")
-                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
-                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
-                    .retrieve()
-                    .body(AiFocusedNavSyncResult.class);
-            if (payload == null) {
-                throw new AiServiceUnavailableException("AI service returned an empty manual sync result", null);
-            }
-            return payload;
-        } catch (RestClientResponseException exception) {
-            if (exception.getStatusCode().value() == 409) {
-                throw new FocusedNavSyncInProgressException("focused NAV sync is already running", exception);
-            }
-            if (exception.getStatusCode().value() == 422) {
-                throw new FocusedNavSyncBaselineMissingException("focused NAV history baseline is missing", exception);
-            }
-            if (exception.getStatusCode().value() == 502) {
-                throw new FocusedNavSyncFailedException("focused NAV sync failed", exception);
-            }
-            throw unavailable(exception);
-        } catch (
-                AiServiceUnavailableException
-                        | FocusedNavSyncBaselineMissingException
-                        | FocusedNavSyncInProgressException
-                        | FocusedNavSyncFailedException exception
-        ) {
             throw exception;
         } catch (RuntimeException exception) {
             throw unavailable(exception);
