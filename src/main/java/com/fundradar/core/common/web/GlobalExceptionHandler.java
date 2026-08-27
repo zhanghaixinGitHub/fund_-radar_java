@@ -43,6 +43,14 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.failure("FUND_NOT_FOUND", "未找到该基金。"));
     }
 
+    /** 将日期范围等参数错误转换为 400，而不是泄露为内部错误。 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleIllegalArgument   >>> {}", exception.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.failure("VALIDATION_ERROR", exception.getMessage()));
+    }
+
     /** 将 Python AI 内部读模型不可用转换为 503，不泄露底层连接或令牌信息。 */
     @ExceptionHandler(AiServiceUnavailableException.class)
     public ResponseEntity<ApiResponse<Void>> handleAiServiceUnavailable(AiServiceUnavailableException exception) {

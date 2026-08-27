@@ -1,7 +1,10 @@
 package com.fundradar.core.fund.service;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
+import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+
+import java.time.LocalDate;
 
 /**
  * 协调基金公开查询的服务接口。
@@ -15,4 +18,7 @@ public interface FundQueryService {
 
     /** 查询单只基金详情，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundDetailResponse getFund(String fundCode);
+
+    /** 查询一只基金在明确日期窗口内的历史净值，可在 AI 服务不可用时返回显式标记的缓存。 */
+    FundNavHistoryResponse getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate);
 }

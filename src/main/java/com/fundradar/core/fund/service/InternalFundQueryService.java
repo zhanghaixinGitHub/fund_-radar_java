@@ -1,10 +1,13 @@
 package com.fundradar.core.fund.service;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
+import com.fundradar.core.fund.api.FundNavHistoryResponse;
+import com.fundradar.core.fund.api.FundNavPointResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.integration.ai.AiFundClient;
 import com.fundradar.core.integration.ai.AiFundDetail;
+import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundPage;
 import com.fundradar.core.integration.ai.AiFundSummary;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
@@ -12,6 +15,8 @@ import com.fundradar.core.fund.cache.RedisFundReadCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
 
 /**
  * FundQueryService 的 M0 实现。
@@ -78,6 +83,27 @@ public class InternalFundQueryService implements FundQueryService {
         }
     }
 
+    @Override
+    /** 查询历史净值；无缓存的 AI 服务异常继续抛出，不能伪造走势图。 */
+    public FundNavHistoryResponse getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+        try {
+            AiFundNavHistory history = aiFundClient.getFundNavHistory(fundCode, startDate, endDate);
+            FundNavHistoryResponse response = toNavHistoryResponse(history);
+            fundReadCache.saveNavHistory(fundCode, startDate, endDate, response);
+            return response;
+        } catch (AiServiceUnavailableException exception) {
+            return fundReadCache.findNavHistory(fundCode, startDate, endDate)
+                    .map(cached -> {
+                        LOGGER.warn(
+                                "InternalFundQueryService.getFundNavHistory   >>> serving stale NAV history from cache, fundCode={}",
+                                fundCode
+                        );
+                        return new FundNavHistoryResponse(cached.data().items(), true, cached.cachedAt());
+                    })
+                    .orElseThrow(() -> exception);
+        }
+    }
+
     /** 将 Python 内部详情转换为 Java 对外详情，并标记为实时结果。 */
     static FundDetailResponse toDetailResponse(AiFundDetail fund) {
         return new FundDetailResponse(
@@ -90,6 +116,19 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.accumulatedNav(),
                 fund.navStatus(),
                 fund.dataSource(),
+                false,
+                null
+        );
+    }
+
+    /** 将 Python 历史净值映射为 Java 对外契约，不修改小数精度。 */
+    static FundNavHistoryResponse toNavHistoryResponse(AiFundNavHistory history) {
+        return new FundNavHistoryResponse(
+                history.items().stream()
+                        .map(point -> new FundNavPointResponse(
+                                point.navDate(), point.unitNav(), point.accumulatedNav()
+                        ))
+                        .toList(),
                 false,
                 null
         );

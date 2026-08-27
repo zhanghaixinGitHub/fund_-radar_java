@@ -2,6 +2,7 @@ package com.fundradar.core.fund.cache;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
+import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
 import org.slf4j.Logger;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Base64;
 import java.util.Optional;
 
@@ -60,6 +62,18 @@ public class RedisFundReadCache {
     /** 读取指定基金详情的最后一次成功缓存。 */
     public Optional<CachedDetail> findDetail(String fundCode) {
         return find(detailKey(fundCode), CachedDetail.class);
+    }
+
+    /** 缓存一次成功的基金历史净值窗口。 */
+    public void saveNavHistory(
+            String fundCode, LocalDate startDate, LocalDate endDate, FundNavHistoryResponse history
+    ) {
+        save(navHistoryKey(fundCode, startDate, endDate), new CachedNavHistory(history, Instant.now()));
+    }
+
+    /** 读取指定基金和日期窗口的最后一次成功历史净值缓存。 */
+    public Optional<CachedNavHistory> findNavHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+        return find(navHistoryKey(fundCode, startDate, endDate), CachedNavHistory.class);
     }
 
     /** 缓存一次成功的关联事件分页响应。 */
@@ -121,6 +135,11 @@ public class RedisFundReadCache {
         return KEY_PREFIX + "detail:" + fundCode;
     }
 
+    /** 生成基金与日期窗口共同隔离的历史净值缓存键。 */
+    private String navHistoryKey(String fundCode, LocalDate startDate, LocalDate endDate) {
+        return KEY_PREFIX + "nav-history:f=" + fundCode + ":s=" + startDate + ":e=" + endDate;
+    }
+
     /** 生成关联事件分页缓存键。 */
     private String eventPageKey(String fundCode, int pageSize, String cursor) {
         return KEY_PREFIX + "events:f=" + fundCode + ":s=" + pageSize + ":c=" + encode(normalize(cursor));
@@ -147,6 +166,10 @@ public class RedisFundReadCache {
 
     /** 基金详情缓存值及其生成时间。 */
     public record CachedDetail(FundDetailResponse data, Instant cachedAt) {
+    }
+
+    /** 基金历史净值缓存值及其生成时间。 */
+    public record CachedNavHistory(FundNavHistoryResponse data, Instant cachedAt) {
     }
 
     /** 关联事件分页缓存值及其生成时间。 */

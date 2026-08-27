@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
+import java.time.LocalDate;
 
 /**
  * M0 基金内部读模型客户端。
@@ -94,6 +95,31 @@ public class AiFundClient {
         }
     }
 
+    /** 查询一只基金在明确日期窗口内的已落库历史净值。 */
+    public AiFundNavHistory getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+        try {
+            AiFundNavHistory payload = restClient.get()
+                    .uri(uriBuilder -> buildFundNavHistoryUri(uriBuilder, fundCode, startDate, endDate))
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFundNavHistory.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty NAV history", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 404) {
+                throw new FundNotFoundException(fundCode);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 根据可选关键字和游标构造基金列表内部接口地址。 */
     private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
@@ -104,6 +130,16 @@ public class AiFundClient {
             uriBuilder.queryParam("cursor", cursor);
         }
         return uriBuilder.build();
+    }
+
+    /** 构造内部历史净值查询地址，日期范围始终由 Java 对外层校验后传入。 */
+    private URI buildFundNavHistoryUri(
+            UriBuilder uriBuilder, String fundCode, LocalDate startDate, LocalDate endDate
+    ) {
+        return uriBuilder.path("/internal/v1/funds/{fundCode}/nav-history")
+                .queryParam("startDate", startDate)
+                .queryParam("endDate", endDate)
+                .build(fundCode);
     }
 
     /** 记录脱敏的调用上下文，并统一包装为对外可识别的服务不可用异常。 */
