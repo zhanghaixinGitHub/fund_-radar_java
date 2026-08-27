@@ -21,10 +21,13 @@ mvn spring-boot:run
 - `GET /api/v1/system/ai-health`：经 Java 探测 FastAPI 内部健康接口。
 - `GET /api/v1/funds`：已持久化的基金目录样本列表；字段为 camelCase。当前仅有 6 条手工核验样本，未同步净值时 `asOfDate=null`。
 - `GET /api/v1/funds/{fundCode}`：目录详情；`navStatus=NOT_SYNCED` 明确表示没有实时或历史净值。
+- `POST /api/v1/funds/sync/focused-nav-incremental`：从详情页手动补齐六只重点基金净值；同步等待完成并返回新增、更新、跳过统计，不依赖 Celery Beat 或 Worker。
 - `GET /api/v1/portfolio/current`：本机当前用户的确认持仓快照；只读，日期未知时返回 `dataAsOfStatus=UNKNOWN` 与 `dataAsOfDate=null`。
 - `GET/POST /api/v1/watchlist`、`DELETE /api/v1/watchlist/{fundCode}`：M1 本机单用户关注；重复写入幂等并记录审计。
 
 基金列表与详情的最后成功读模型会缓存到 Redis。FastAPI 不可用时，只有命中缓存才返回 `stale=true` 和 `cachedAt`；调用方必须明确展示陈旧状态。
+
+人工同步调用 Python 的读取超时独立配置为 `AI_SERVICE_MANUAL_SYNC_READ_TIMEOUT`（默认 5 分钟），不会放宽普通读模型的 `AI_SERVICE_READ_TIMEOUT`（默认 3 秒）。若已有手动或定时同步运行，接口返回 `409/FOCUSED_SYNC_IN_PROGRESS`，前端应等待后重试。
 
 关联文档：
 

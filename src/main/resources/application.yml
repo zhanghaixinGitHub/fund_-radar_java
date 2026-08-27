@@ -34,6 +34,7 @@ ai:
     token: ${AI_SERVICE_TOKEN:}
     connect-timeout: ${AI_SERVICE_CONNECT_TIMEOUT:2s}
     read-timeout: ${AI_SERVICE_READ_TIMEOUT:3s}
+    manual-sync-read-timeout: ${AI_SERVICE_MANUAL_SYNC_READ_TIMEOUT:5m}
 
 fund:
   read-cache:

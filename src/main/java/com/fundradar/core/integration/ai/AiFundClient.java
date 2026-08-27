@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDate;
 
 /**
@@ -26,16 +27,18 @@ public class AiFundClient {
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
 
     private final RestClient restClient;
+    private final RestClient manualSyncRestClient;
     private final AiServiceProperties properties;
 
     public AiFundClient(RestClient.Builder restClientBuilder, AiServiceProperties properties) {
         this.properties = properties;
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(properties.getConnectTimeout());
-        requestFactory.setReadTimeout(properties.getReadTimeout());
         this.restClient = restClientBuilder
                 .baseUrl(properties.getBaseUrl())
-                .requestFactory(requestFactory)
+                .requestFactory(createRequestFactory(properties.getReadTimeout()))
+                .build();
+        this.manualSyncRestClient = RestClient.builder()
+                .baseUrl(properties.getBaseUrl())
+                .requestFactory(createRequestFactory(properties.getManualSyncReadTimeout()))
                 .build();
     }
 
@@ -120,6 +123,42 @@ public class AiFundClient {
         }
     }
 
+    /** 手动触发 Python 的重点基金增量同步；该调用使用独立长超时，不影响正常页面读取。 */
+    public AiFocusedNavSyncResult syncFocusedNavIncremental() {
+        try {
+            AiFocusedNavSyncResult payload = manualSyncRestClient.post()
+                    .uri("/internal/v1/funds/sync/focused-nav-incremental")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFocusedNavSyncResult.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty manual sync result", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 409) {
+                throw new FocusedNavSyncInProgressException("focused NAV sync is already running", exception);
+            }
+            if (exception.getStatusCode().value() == 422) {
+                throw new FocusedNavSyncBaselineMissingException("focused NAV history baseline is missing", exception);
+            }
+            if (exception.getStatusCode().value() == 502) {
+                throw new FocusedNavSyncFailedException("focused NAV sync failed", exception);
+            }
+            throw unavailable(exception);
+        } catch (
+                AiServiceUnavailableException
+                        | FocusedNavSyncBaselineMissingException
+                        | FocusedNavSyncInProgressException
+                        | FocusedNavSyncFailedException exception
+        ) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 根据可选关键字和游标构造基金列表内部接口地址。 */
     private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
@@ -140,6 +179,14 @@ public class AiFundClient {
                 .queryParam("startDate", startDate)
                 .queryParam("endDate", endDate)
                 .build(fundCode);
+    }
+
+    /** 按本次调用类型构建隔离的 HTTP 超时配置。 */
+    private SimpleClientHttpRequestFactory createRequestFactory(Duration readTimeout) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(properties.getConnectTimeout());
+        requestFactory.setReadTimeout(readTimeout);
+        return requestFactory;
     }
 
     /** 记录脱敏的调用上下文，并统一包装为对外可识别的服务不可用异常。 */

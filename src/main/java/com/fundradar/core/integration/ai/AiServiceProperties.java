@@ -20,6 +20,8 @@ public class AiServiceProperties {
     private Duration connectTimeout = Duration.ofSeconds(2);
     /** 等待 Python 返回读模型的最长时间。 */
     private Duration readTimeout = Duration.ofSeconds(3);
+    /** 等待用户主动发起净值同步完成的最长时间；不影响普通读模型请求。 */
+    private Duration manualSyncReadTimeout = Duration.ofMinutes(5);
 
     /** 返回 Python AI 内部服务基础地址。 */
     public String getBaseUrl() {
@@ -59,5 +61,15 @@ public class AiServiceProperties {
     /** 由配置绑定设置内部 HTTP 读取超时。 */
     public void setReadTimeout(Duration readTimeout) {
         this.readTimeout = readTimeout;
+    }
+
+    /** 返回人工净值同步调用的最长读取等待时间。 */
+    public Duration getManualSyncReadTimeout() {
+        return manualSyncReadTimeout;
+    }
+
+    /** 由受保护的配置源绑定人工净值同步读取超时。 */
+    public void setManualSyncReadTimeout(Duration manualSyncReadTimeout) {
+        this.manualSyncReadTimeout = manualSyncReadTimeout;
     }
 }
