@@ -121,6 +121,36 @@ public class AiFundClient {
         }
     }
 
+    /**
+     * 查询一只基金的完整内部详情。
+     *
+     * 调用方必须先在 Java 服务端验证当前用户的关注关系；此请求不传递用户标识、
+     * 关注状态或任何浏览器会话信息。
+     */
+    public AiFundWatchlistDetail getFundWatchlistDetail(String fundCode) {
+        try {
+            AiFundWatchlistDetail payload = restClient.get()
+                    .uri("/internal/v1/funds/{fundCode}/watchlist-detail", fundCode)
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFundWatchlistDetail.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty full fund detail", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 404) {
+                throw new FundNotFoundException(fundCode);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 查询一只基金在明确日期窗口内的已落库历史净值。 */
     public AiFundNavHistory getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
         try {

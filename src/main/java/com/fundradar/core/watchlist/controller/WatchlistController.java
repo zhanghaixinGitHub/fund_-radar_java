@@ -3,10 +3,13 @@ package com.fundradar.core.watchlist.controller;
 import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
+import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
+import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.watchlist.api.CreateWatchlistItemRequest;
 import com.fundradar.core.watchlist.api.WatchlistItemResponse;
 import com.fundradar.core.watchlist.api.WatchlistPageResponse;
 import com.fundradar.core.watchlist.service.WatchlistService;
+import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.validation.annotation.Validated;
@@ -22,7 +25,9 @@ import org.springframework.web.bind.annotation.RestController;
  * 当前登录用户的关注列表接口；数据范围始终取服务端认证上下文。
  *
  * <p>关联文档：docs_zhx/requirements/user-auth-and-access.md；
- * docs_zhx/design/user-auth-and-access.md；docs_zhx/testcase/user-auth-and-access.md。</p>
+ * docs_zhx/design/user-auth-and-access.md；docs_zhx/testcase/user-auth-and-access.md；
+ * docs_zhx/requirements/fund-detail-expansion.md；
+ * docs_zhx/design/fund-detail-expansion.md；docs_zhx/testcase/fund-detail-expansion.md。</p>
  */
 @RestController
 @Validated
@@ -30,9 +35,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class WatchlistController {
 
     private final WatchlistService watchlistService;
+    private final FundQueryService fundQueryService;
 
-    public WatchlistController(WatchlistService watchlistService) {
+    public WatchlistController(WatchlistService watchlistService, FundQueryService fundQueryService) {
         this.watchlistService = watchlistService;
+        this.fundQueryService = fundQueryService;
     }
 
     /** 查询当前登录用户的关注基金分页；默认每页 10 条，类型筛选由服务端执行。 */
@@ -50,6 +57,26 @@ public class WatchlistController {
     ) {
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
         return ApiResponse.success(watchlistService.listCurrentUserItems(fundType, page, pageSize));
+    }
+
+    /**
+     * 查询当前用户已关注基金的完整详情。先验证当前会话的关注关系，再请求 Python
+     * 只读资料；请求中不传递用户标识或关注状态。
+     * 关联文档：docs_zhx/requirements/fund-detail-expansion.md、
+     * docs_zhx/design/fund-detail-expansion.md、docs_zhx/testcase/fund-detail-expansion.md。
+     */
+    @GetMapping("/{fundCode}/detail")
+    public ApiResponse<WatchlistFundDetailResponse> getCurrentUserWatchlistFundDetail(
+            @PathVariable @Pattern(regexp = "^\\d{6}$", message = "基金代码必须为 6 位数字。") String fundCode
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
+        boolean followed = watchlistService.findCurrentUserFollowedFundCodes(java.util.List.of(fundCode))
+                .contains(fundCode);
+        if (!followed) {
+            throw new WatchlistRequiredException();
+        }
+        return ApiResponse.success(fundQueryService.getWatchlistFundDetail(fundCode).withWatchStatus());
     }
 
     /** 将基金加入当前本地用户的关注列表；重复添加为幂等操作。 */

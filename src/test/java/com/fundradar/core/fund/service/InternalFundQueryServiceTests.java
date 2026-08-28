@@ -4,17 +4,23 @@ import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.integration.ai.AiFundDetail;
+import com.fundradar.core.integration.ai.AiFundDividend;
+import com.fundradar.core.integration.ai.AiFundManager;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundNavPoint;
 import com.fundradar.core.integration.ai.AiFundPage;
+import com.fundradar.core.integration.ai.AiFundShareSnapshot;
 import com.fundradar.core.integration.ai.AiFundSummary;
+import com.fundradar.core.integration.ai.AiFundWatchlistDetail;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 验证 Python 内部净值字段能完整映射到 Java 对外详情契约。 */
 class InternalFundQueryServiceTests {
@@ -85,5 +91,37 @@ class InternalFundQueryServiceTests {
         assertEquals("010710", response.items().get(0).fundCode());
         assertEquals(new BigDecimal("0.02000000"), response.items().get(0).weekChangeRate());
         assertFalse(response.stale());
+    }
+
+    @Test
+    void mapsFullDetailWithoutPuttingWatchStatusIntoTheInternalPayload() {
+        AiFundWatchlistDetail source = new AiFundWatchlistDetail(
+                new AiFundDetail(
+                        "002112", "德邦鑫星价值灵活配置混合C", "MIXED", "ACTIVE",
+                        LocalDate.of(2026, 8, 25), new BigDecimal("4.89360000"), new BigDecimal("5.04160000"),
+                        "SYNCED", "TUSHARE_PRO_FUND", null, null, null
+                ),
+                "SYNCED",
+                List.of(new AiFundManager(
+                        "张三", LocalDate.of(2020, 1, 1), LocalDate.of(2020, 1, 1), null,
+                        "硕士", "TUSHARE_PRO_FUND"
+                )),
+                "SYNCED",
+                new AiFundShareSnapshot(LocalDate.of(2026, 8, 25), new BigDecimal("12345.6000"), "TUSHARE_PRO_FUND"),
+                "SYNCED",
+                List.of(new AiFundDividend(
+                        LocalDate.of(2026, 8, 1), null, null, "实施", null, null, null, null, null,
+                        new BigDecimal("0.0100"), null, null, null, null, "2026", "TUSHARE_PRO_FUND"
+                ))
+        );
+
+        var response = InternalFundQueryService.toWatchlistFundDetailResponse(source);
+
+        assertFalse(response.basic().isWatched());
+        assertEquals("张三", response.managers().get(0).managerName());
+        assertEquals(new BigDecimal("12345.6000"), response.latestShare().fundShare());
+        assertEquals(new BigDecimal("0.0100"), response.dividends().get(0).cashDividend());
+        assertFalse(response.stale());
+        assertTrue(response.withWatchStatus().basic().isWatched());
     }
 }

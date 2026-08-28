@@ -34,8 +34,9 @@ import java.util.Set;
  * 浏览器只访问本控制器；基金、事件与评分数据均由 Service 层受控转发到 Python AI 内部服务。
  *
  * <p>关联文档：docs_zhx/requirements/fund-radar.md；
- * docs_zhx/design/fund-radar.md；
- * docs_zhx/testcase/fund-radar.md。</p>
+ * docs_zhx/design/fund-radar.md；docs_zhx/testcase/fund-radar.md；
+ * docs_zhx/requirements/fund-detail-expansion.md；
+ * docs_zhx/design/fund-detail-expansion.md；docs_zhx/testcase/fund-detail-expansion.md。</p>
  */
 @Validated
 @RestController
@@ -84,7 +85,11 @@ public class FundController {
         ));
     }
 
-    /** 查询指定六位基金代码的详情；AI 服务不可用时可安全降级为缓存结果。 */
+    /**
+     * 查询指定六位基金代码的市场基础详情；AI 服务不可用时可安全降级为缓存结果。
+     * 关联文档：docs_zhx/requirements/fund-detail-expansion.md、
+     * docs_zhx/design/fund-detail-expansion.md、docs_zhx/testcase/fund-detail-expansion.md。
+     */
     @GetMapping("/{fundCode}")
     public ApiResponse<FundDetailResponse> getFund(@PathVariable @Size(min = 6, max = 6) String fundCode) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
@@ -152,11 +157,6 @@ public class FundController {
     private FundDetailResponse withWatchStatus(FundDetailResponse response) {
         boolean watched = watchlistService.findCurrentUserFollowedFundCodes(List.of(response.fundCode()))
                 .contains(response.fundCode());
-        return new FundDetailResponse(
-                response.fundCode(), response.fundName(), response.fundType(), response.status(), response.asOfDate(),
-                response.unitNav(), response.accumulatedNav(), response.navStatus(), response.dataSource(),
-                response.dayChangeRate(), response.weekChangeRate(), response.monthChangeRate(), watched,
-                response.stale(), response.cachedAt()
-        );
+        return response.withClientState(watched, response.stale(), response.cachedAt());
     }
 }

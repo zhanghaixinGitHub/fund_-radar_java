@@ -1,12 +1,17 @@
 package com.fundradar.core.fund.service;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
+import com.fundradar.core.fund.api.FundDividendResponse;
+import com.fundradar.core.fund.api.FundManagerResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundNavPointResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundShareSnapshotResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
+import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
 import com.fundradar.core.integration.ai.AiFundClient;
 import com.fundradar.core.integration.ai.AiFundDetail;
+import com.fundradar.core.integration.ai.AiFundWatchlistDetail;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundPage;
 import com.fundradar.core.integration.ai.AiFundSummary;
@@ -75,16 +80,20 @@ public class InternalFundQueryService implements FundQueryService {
             return fundReadCache.findDetail(fundCode)
                     .map(cached -> {
                         LOGGER.warn("InternalFundQueryService.getFund   >>> serving stale fund detail from cache, fundCode={}", fundCode);
-                        FundDetailResponse data = cached.data();
-                        return new FundDetailResponse(
-                                data.fundCode(), data.fundName(), data.fundType(), data.status(), data.asOfDate(),
-                                data.unitNav(), data.accumulatedNav(), data.navStatus(), data.dataSource(),
-                                data.dayChangeRate(), data.weekChangeRate(), data.monthChangeRate(), false,
-                                true, cached.cachedAt()
-                        );
+                        return cached.data().withClientState(false, true, cached.cachedAt());
                     })
                     .orElseThrow(() -> exception);
         }
+    }
+
+    @Override
+    /**
+     * 查询关注后完整详情；调用方已经完成当前用户关系校验，因此这里不接收用户参数。
+     * 完整详情不写共享 Redis，避免任何授权结论与用户态进入缓存。
+     */
+    public WatchlistFundDetailResponse getWatchlistFundDetail(String fundCode) {
+        AiFundWatchlistDetail fund = aiFundClient.getFundWatchlistDetail(fundCode);
+        return toWatchlistFundDetailResponse(fund);
     }
 
     @Override
@@ -118,12 +127,69 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.asOfDate(),
                 fund.unitNav(),
                 fund.accumulatedNav(),
+                fund.navAnnDate(),
+                fund.accumulatedDividend(),
+                fund.netAsset(),
+                fund.totalNetAsset(),
+                fund.adjustedNav(),
                 fund.navStatus(),
                 fund.dataSource(),
                 fund.dayChangeRate(),
                 fund.weekChangeRate(),
                 fund.monthChangeRate(),
+                fund.profileStatus(),
+                fund.profileDataSource(),
+                fund.managementCompanyName(),
+                fund.custodianName(),
+                fund.foundDate(),
+                fund.dueDate(),
+                fund.listDate(),
+                fund.issueDate(),
+                fund.delistDate(),
+                fund.issueAmount(),
+                fund.managementFee(),
+                fund.custodianFee(),
+                fund.durationYear(),
+                fund.parValue(),
+                fund.minPurchaseAmount(),
+                fund.expectedReturn(),
+                fund.benchmark(),
+                fund.investType(),
+                fund.sourceFundType(),
+                fund.trusteeName(),
+                fund.purchaseStartDate(),
+                fund.redemptionStartDate(),
+                fund.market(),
                 false,
+                false,
+                null
+        );
+    }
+
+    /** 将 Python 完整详情转换为 Java 对外契约；该结果尚未写入用户态。 */
+    static WatchlistFundDetailResponse toWatchlistFundDetailResponse(AiFundWatchlistDetail fund) {
+        return new WatchlistFundDetailResponse(
+                toDetailResponse(fund.basic()),
+                fund.managersStatus(),
+                fund.managers().stream()
+                        .map(item -> new FundManagerResponse(
+                                item.managerName(), item.annDate(), item.beginDate(), item.endDate(),
+                                item.education(), item.dataSource()
+                        ))
+                        .toList(),
+                fund.latestShareStatus(),
+                fund.latestShare() == null ? null : new FundShareSnapshotResponse(
+                        fund.latestShare().tradeDate(), fund.latestShare().fundShare(), fund.latestShare().dataSource()
+                ),
+                fund.dividendsStatus(),
+                fund.dividends().stream()
+                        .map(item -> new FundDividendResponse(
+                                item.annDate(), item.implementationAnnDate(), item.baseDate(), item.processStatus(),
+                                item.recordDate(), item.exDate(), item.payDate(), item.earningsPayDate(),
+                                item.navExDate(), item.cashDividend(), item.baseUnit(), item.distributableEarnings(),
+                                item.earningsAmount(), item.reinvestmentArrivalDate(), item.baseYear(), item.dataSource()
+                        ))
+                        .toList(),
                 false,
                 null
         );

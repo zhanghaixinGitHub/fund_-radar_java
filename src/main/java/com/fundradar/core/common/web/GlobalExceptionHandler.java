@@ -10,6 +10,7 @@ import com.fundradar.core.integration.ai.MarketNavSyncInProgressException;
 import com.fundradar.core.integration.ai.FundNotFoundException;
 import com.fundradar.core.integration.ai.SyncJobNotFoundException;
 import com.fundradar.core.watchlist.credit.WatchlistQuotaExceededException;
+import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -112,6 +113,14 @@ public class GlobalExceptionHandler {
         LOGGER.warn("GlobalExceptionHandler.handleWatchlistQuotaExceeded   >>> watchlist quota exceeded");
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.failure("WATCHLIST_QUOTA_EXCEEDED", exception.getMessage()));
+    }
+
+    /** 基金存在但未被当前用户关注时，完整详情必须拒绝而不能按公开详情降级。 */
+    @ExceptionHandler(WatchlistRequiredException.class)
+    public ResponseEntity<ApiResponse<Void>> handleWatchlistRequired(WatchlistRequiredException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleWatchlistRequired   >>> full detail rejected because fund is not followed");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.failure("WATCHLIST_REQUIRED", "请先将该基金加入关注列表后再查看完整详情。"));
     }
 
     /** Python 服务重启后内存任务不存在时，提示用户重新发起而非伪造成同步失败。 */

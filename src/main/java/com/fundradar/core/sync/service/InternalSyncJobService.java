@@ -1,7 +1,9 @@
 package com.fundradar.core.sync.service;
 
 import com.fundradar.core.integration.ai.AiSyncJobClient;
+import com.fundradar.core.integration.ai.AiSyncJobLastSuccess;
 import com.fundradar.core.integration.ai.AiSyncJobStatus;
+import com.fundradar.core.sync.api.SyncJobLastSuccessResponse;
 import com.fundradar.core.sync.api.SyncJobResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,9 +35,32 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startMarketDetails() {
+        SyncJobResponse response = toResponse(aiSyncJobClient.startMarketDetails());
+        LOGGER.info(
+                "InternalSyncJobService.startMarketDetails   >>> sync job started, jobId={}, status={}",
+                response.jobId(), response.status()
+        );
+        return response;
+    }
+
+    @Override
     public SyncJobResponse getLatestMarketNavIncremental() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestMarketNavIncremental();
         return source == null ? null : toResponse(source);
+    }
+
+    @Override
+    public SyncJobResponse getLatestMarketDetails() {
+        AiSyncJobStatus source = aiSyncJobClient.getLatestMarketDetails();
+        return source == null ? null : toResponse(source);
+    }
+
+    @Override
+    public List<SyncJobLastSuccessResponse> getLastSuccessfulSyncTimes() {
+        return aiSyncJobClient.getLastSuccessfulSyncTimes().stream()
+                .map(InternalSyncJobService::toLastSuccessResponse)
+                .toList();
     }
 
     @Override
@@ -65,5 +90,9 @@ public class InternalSyncJobService implements SyncJobService {
                 source.startedAt(),
                 source.finishedAt()
         );
+    }
+
+    private static SyncJobLastSuccessResponse toLastSuccessResponse(AiSyncJobLastSuccess source) {
+        return new SyncJobLastSuccessResponse(source.jobType(), source.lastSuccessfulAt());
     }
 }
