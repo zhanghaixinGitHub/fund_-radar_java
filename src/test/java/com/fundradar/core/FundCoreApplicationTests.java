@@ -1,5 +1,6 @@
 package com.fundradar.core;
 
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -7,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
@@ -74,6 +76,7 @@ class FundCoreApplicationTests {
     void requiresExplicitRegistrationBeforeSignIn() throws Exception {
         String mobile = "139" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
         String password = "123456";
+        String displayName = "测试用户";
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType("application/json")
@@ -84,12 +87,20 @@ class FundCoreApplicationTests {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType("application/json")
                         .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.role").value("FUND_USER"));
+                .andExpect(status().isBadRequest());
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType("application/json")
-                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password
+                                + "\",\"displayName\":\"" + displayName + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("FUND_USER"))
+                .andExpect(jsonPath("$.data.displayName").value(displayName));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password
+                                + "\",\"displayName\":\"" + displayName + "\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("ACCOUNT_ALREADY_EXISTS"));
 
@@ -97,6 +108,37 @@ class FundCoreApplicationTests {
                         .contentType("application/json")
                         .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password + "\"}"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("FUND_USER"))
+                .andExpect(jsonPath("$.data.displayName").value(displayName));
+    }
+
+    /** 已认证用户携带匹配 CSRF 后只能更新自己的姓名，并立即取得更新后的公开资料。 */
+    @Test
+    @Transactional
+    void updatesCurrentProfileDisplayNameWithValidSessionAndCsrf() throws Exception {
+        String mobile = "137" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
+        String password = "123456";
+        String originalDisplayName = "原姓名";
+        String updatedDisplayName = "新姓名";
+
+        MvcResult registration = mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType("application/json")
+                        .content("{\"mobile\":\"" + mobile + "\",\"password\":\"" + password
+                                + "\",\"displayName\":\"" + originalDisplayName + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie sessionCookie = registration.getResponse().getCookie("fund_radar_session");
+        Cookie csrfCookie = registration.getResponse().getCookie("fund_radar_csrf");
+        Assertions.assertNotNull(sessionCookie);
+        Assertions.assertNotNull(csrfCookie);
+
+        mockMvc.perform(put("/api/v1/auth/me/profile")
+                        .cookie(sessionCookie, csrfCookie)
+                        .header("X-CSRF-Token", csrfCookie.getValue())
+                        .contentType("application/json")
+                        .content("{\"displayName\":\"" + updatedDisplayName + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.displayName").value(updatedDisplayName))
                 .andExpect(jsonPath("$.data.role").value("FUND_USER"));
     }
 

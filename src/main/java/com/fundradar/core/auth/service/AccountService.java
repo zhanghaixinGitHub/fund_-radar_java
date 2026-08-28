@@ -66,9 +66,9 @@ public class AccountService {
 
     /** 显式注册默认基金用户并建立新会话；手机号唯一约束保证并发提交只会成功一次。 */
     @Transactional
-    public LoginSession register(String requestedMobile, String password) {
+    public LoginSession register(String requestedMobile, String password, String requestedDisplayName) {
         String mobile = normalizeMobile(requestedMobile);
-        AccountCredential credential = registerFundUser(mobile, password);
+        AccountCredential credential = registerFundUser(mobile, password, requestedDisplayName);
         return createSession(credential, "USER_REGISTERED");
     }
 
@@ -136,6 +136,28 @@ public class AccountService {
                 .update();
         writeAudit(user.userId().toString(), "LOGOUT", user.userId().toString());
         LOGGER.info("AccountService.logout   >>> userId={}, sessionRemoved={}", user.userId(), deleted == 1);
+    }
+
+    /** 当前会话只能更新自身姓名；角色、手机号和权限边界均由其他受控流程维护。 */
+    @Transactional
+    public CurrentUserResponse updateCurrentProfile(AuthenticatedUser user, String requestedDisplayName) {
+        String displayName = normalizeDisplayName(requestedDisplayName);
+        int updated = jdbcClient.sql("""
+                        UPDATE user_account
+                        SET display_name = :displayName, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = :userId
+                        """)
+                .param("displayName", displayName)
+                .param("userId", user.userId())
+                .update();
+        if (updated != 1) {
+            throw new AuthenticationRequiredException();
+        }
+        writeAudit(user.userId().toString(), "USER_PROFILE_UPDATED", user.userId().toString());
+        LOGGER.info("AccountService.updateCurrentProfile   >>> userId={}", user.userId());
+        return CurrentUserResponse.from(toAuthenticatedUser(
+                user.userId(), user.mobile(), displayName, user.role()
+        ));
     }
 
     /** 按页返回后台账户清单和每个用户的关注数，避免应用层 N+1 聚合。 */
@@ -324,10 +346,10 @@ public class AccountService {
     }
 
     /** 显式注册默认基金用户；冲突不进入异常事务状态，而是稳定返回重复注册错误。 */
-    private AccountCredential registerFundUser(String mobile, String password) {
+    private AccountCredential registerFundUser(String mobile, String password, String requestedDisplayName) {
         PasswordPolicy.validate(password);
         UUID userId = UUID.randomUUID();
-        String displayName = "基金用户" + maskMobile(mobile);
+        String displayName = normalizeDisplayName(requestedDisplayName);
         String passwordHash = passwordEncoder.encode(password);
         int created = jdbcClient.sql("""
                         INSERT INTO user_account (user_id, mobile, display_name, password_hash, role, status)
