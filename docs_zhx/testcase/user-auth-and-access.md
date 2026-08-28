@@ -80,6 +80,35 @@ ORDER BY user_id;
 | 并发安全 | 对同一用户并行新增关注与发放后，积分可用数不为负，锁定数不大于积分总额。 |
 | 历史关注迁移 | 不重复的历史关注全部保留并转至目标账户；目标账户最终超额数量大于现有积分时，仅补发差额 `MIGRATION_GRANT`，锁定数等于 `max(0, 最终关注数 - 5)`。 |
 
+---
+
+## AUTH-14｜系统管理员查看积分流水
+
+前置条件：活动账户已有至少一条管理员发放或迁移积分流水；系统管理员、数据运营和普通用户各有活动会话。
+
+操作步骤：
+
+1. 系统管理员请求 `GET /api/v1/admin/users/{userId}/watchlist-credit-ledger?page=0&pageSize=20`。
+2. 核对返回顺序、类型、积分变动、原因、操作人显示名和时间；关闭前端明细后重新进入。
+3. 数据运营和普通用户请求同一接口；系统管理员请求不存在用户或非法分页参数。
+
+数据库验证：
+
+```sql
+SELECT entry_type, credit_delta, reason, actor_id, created_at
+FROM watchlist_credit_ledger
+WHERE user_id = :target_user_id
+ORDER BY created_at DESC, credit_ledger_id DESC;
+```
+
+| 项目 | 预期值 |
+| --- | --- |
+| 系统管理员 | 返回与查询一致的分页流水；响应不包含手机号、用户 UUID、基金代码或 `actor_id`。 |
+| 前端明细 | 仅在当前用户管理页显示；关闭后组件内存清空。 |
+| 数据运营/普通用户 | `403/ACCESS_DENIED`。 |
+| 读取审计 | 成功查看新增 `WATCHLIST_CREDIT_LEDGER_VIEWED`，记录操作管理员与目标内部标识。 |
+| 非法目标/分页 | 不返回流水，分别为稳定的 `400` 错误响应。 |
+
 ## 自动化验证
 
 1. 使用项目 `.tools/jdk17/jdk-17.0.20.1+1` 执行 `mvn test`，覆盖密码策略、未知手机号登录不建号、显式注册、重复注册、令牌摘要、管理员全权限、上下文拒绝和手机号脱敏。

@@ -2,6 +2,8 @@ package com.fundradar.core.watchlist.credit;
 
 import com.fundradar.core.auth.AuthenticatedUser;
 import com.fundradar.core.common.trace.TraceContext;
+import com.fundradar.core.watchlist.api.WatchlistCreditLedgerEntryResponse;
+import com.fundradar.core.watchlist.api.WatchlistCreditLedgerPageResponse;
 import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -143,6 +145,55 @@ public class JdbcWatchlistCreditService implements WatchlistCreditService {
 
     @Override
     @Transactional
+    public WatchlistCreditLedgerPageResponse listCreditLedger(
+            UUID targetUserId, int page, int pageSize, AuthenticatedUser actor
+    ) {
+        if (!accountExists(targetUserId)) {
+            throw new IllegalArgumentException("目标用户不存在。");
+        }
+        long totalCount = jdbcClient.sql("""
+                        SELECT COUNT(*)
+                        FROM watchlist_credit_ledger
+                        WHERE user_id = :userId
+                        """)
+                .param("userId", targetUserId)
+                .query(Long.class)
+                .single();
+        List<WatchlistCreditLedgerEntryResponse> items = jdbcClient.sql("""
+                        SELECT ledger.entry_type,
+                               ledger.credit_delta,
+                               ledger.reason,
+                               COALESCE(actor_account.display_name,
+                                   CASE ledger.actor_id WHEN 'migration' THEN '系统迁移' ELSE '系统' END
+                               ) AS actor_display_name,
+                               ledger.created_at
+                        FROM watchlist_credit_ledger ledger
+                        LEFT JOIN user_account actor_account ON actor_account.user_id::TEXT = ledger.actor_id
+                        WHERE ledger.user_id = :userId
+                        ORDER BY ledger.created_at DESC, ledger.credit_ledger_id DESC
+                        LIMIT :pageSize OFFSET :offset
+                        """)
+                .param("userId", targetUserId)
+                .param("pageSize", pageSize)
+                .param("offset", (long) page * pageSize)
+                .query((row, rowNumber) -> new WatchlistCreditLedgerEntryResponse(
+                        row.getString("entry_type"),
+                        row.getInt("credit_delta"),
+                        row.getString("reason"),
+                        row.getString("actor_display_name"),
+                        row.getTimestamp("created_at").toInstant()
+                ))
+                .list();
+        writeAudit(actor, "WATCHLIST_CREDIT_LEDGER_VIEWED", targetUserId + ":" + page);
+        LOGGER.info("JdbcWatchlistCreditService.listCreditLedger   >>> actorId={}, targetUserId={}, page={}, pageSize={}, total={}",
+                actor.userId(), targetUserId, page, pageSize, totalCount);
+        return new WatchlistCreditLedgerPageResponse(
+                items, page, pageSize, totalCount, Math.toIntExact((totalCount + pageSize - 1) / pageSize)
+        );
+    }
+
+    @Override
+    @Transactional
     public WatchlistQuotaResponse grantCredits(UUID targetUserId, int amount, String requestedReason, AuthenticatedUser actor) {
         if (amount <= 0 || amount > 10_000) {
             throw new IllegalArgumentException("试用关注积分数量必须在 1 至 10000 之间。");
@@ -277,6 +328,13 @@ public class JdbcWatchlistCreditService implements WatchlistCreditService {
                           AND status = 'ACTIVE'
                           AND mobile <> 'legacy-local-user'
                         """)
+                .param("userId", userId)
+                .query(Long.class)
+                .single() == 1;
+    }
+
+    private boolean accountExists(UUID userId) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM user_account WHERE user_id = :userId")
                 .param("userId", userId)
                 .query(Long.class)
                 .single() == 1;

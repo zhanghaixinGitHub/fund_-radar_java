@@ -78,5 +78,10 @@ V9 迁移先为所有既有账户创建锁锚点；对已有超过 5 条关注�
 | `POST /api/v1/watchlist` | `WATCHLIST_SELF_WRITE` | 插入新关注后在同一事务检查并锁定额度；积分不足返回 `409/WATCHLIST_QUOTA_EXCEEDED`。重复添加保持幂等且不再占用积分。 |
 | `DELETE /api/v1/watchlist/{fundCode}` | `WATCHLIST_SELF_WRITE` | 删除后在同一事务释放该项或冗余锁定积分；重复删除保持幂等。 |
 | `POST /api/v1/admin/users/{userId}/watchlist-credits` | 仅 `SYSTEM_ADMIN` | 请求 `{amount, reason}`；只允许对启用的非历史账户发放正数积分，返回更新后的额度。 |
+| `GET /api/v1/admin/users/{userId}/watchlist-credit-ledger` | 仅 `SYSTEM_ADMIN` | 按 `created_at DESC, credit_ledger_id DESC` 分页读取积分流水；每次读取写入审计。 |
 
 `JdbcWatchlistService` 继续负责基金存在校验和关注记录；`JdbcWatchlistCreditService` 只负责积分流水、锁定关系、额度计算和审计。FastAPI、市场同步范围、共享 Redis 基金读模型与个人持仓不参与积分逻辑。
+
+### 7.3 积分流水查看
+
+不新增表或迁移，直接使用 V9 的 `ix_watchlist_credit_ledger_user_created_at(user_id, created_at DESC, credit_ledger_id DESC)` 索引。响应只包含类型、正数积分变动、原因、操作人显示名和创建时间：`actor_id='migration'` 显示为“系统迁移”，其余操作人仅通过 `user_account` 关联为显示名，不能把 UUID 原样返回浏览器。关闭前端明细后清空组件状态；每次读取写入 `WATCHLIST_CREDIT_LEDGER_VIEWED` 审计。

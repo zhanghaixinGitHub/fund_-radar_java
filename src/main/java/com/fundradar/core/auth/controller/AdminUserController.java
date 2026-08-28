@@ -14,6 +14,7 @@ import com.fundradar.core.auth.service.AccountService;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.portfolio.api.PortfolioSnapshotResponse;
 import com.fundradar.core.portfolio.service.PortfolioSnapshotService;
+import com.fundradar.core.watchlist.api.WatchlistCreditLedgerPageResponse;
 import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
 import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import jakarta.validation.Valid;
@@ -112,6 +113,19 @@ public class AdminUserController {
     ) {
         return ApiResponse.success(watchlistCreditService.grantCredits(
                 userId, request.amount(), request.reason(), CurrentUserContext.requireAdministrator()
+        ));
+    }
+
+    /** 系统管理员按时间倒序受控查看指定账户的积分流水；不返回手机号或内部标识。 */
+    @GetMapping("/users/{userId}/watchlist-credit-ledger")
+    public ApiResponse<WatchlistCreditLedgerPageResponse> listWatchlistCreditLedger(
+            @PathVariable UUID userId,
+            @RequestParam(defaultValue = "0") @Min(value = 0, message = "页码不能小于 0。") int page,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页数量至少为 1。")
+            @Max(value = 100, message = "每页数量不能超过 100。") int pageSize
+    ) {
+        return ApiResponse.success(watchlistCreditService.listCreditLedger(
+                userId, page, pageSize, CurrentUserContext.requireAdministrator()
         ));
     }
 

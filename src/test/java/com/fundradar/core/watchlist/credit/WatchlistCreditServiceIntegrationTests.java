@@ -3,6 +3,7 @@ package com.fundradar.core.watchlist.credit;
 import com.fundradar.core.auth.AccountRole;
 import com.fundradar.core.auth.AuthenticatedUser;
 import com.fundradar.core.auth.PermissionCode;
+import com.fundradar.core.watchlist.api.WatchlistCreditLedgerPageResponse;
 import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -101,8 +102,31 @@ class WatchlistCreditServiceIntegrationTests {
         Assertions.assertEquals(0, quota.trialCreditAvailable());
     }
 
+    /** 管理员可按时间倒序读取积分流水，且返回操作人显示名和原因而非内部标识。 */
+    @Test
+    void listsCreditLedgerWithReasonAndAdministratorDisplayName() {
+        AuthenticatedUser user = createActiveAccount(AccountRole.FUND_USER, "积分测试用户");
+        AuthenticatedUser administrator = createActiveAccount(AccountRole.SYSTEM_ADMIN, "积分测试管理员");
+        watchlistCreditService.grantCredits(user.userId(), 2, "人工扩容", administrator);
+
+        WatchlistCreditLedgerPageResponse ledger = watchlistCreditService.listCreditLedger(
+                user.userId(), 0, 20, administrator
+        );
+
+        Assertions.assertEquals(1, ledger.totalCount());
+        Assertions.assertEquals(1, ledger.items().size());
+        Assertions.assertEquals("ADMIN_GRANT", ledger.items().get(0).entryType());
+        Assertions.assertEquals(2, ledger.items().get(0).creditDelta());
+        Assertions.assertEquals("人工扩容", ledger.items().get(0).reason());
+        Assertions.assertEquals("积分测试管理员", ledger.items().get(0).actorDisplayName());
+    }
+
     /** 创建受真实数据库约束校验的测试账户，不包含真实姓名、手机号或凭据。 */
     private AuthenticatedUser createActiveAccount(AccountRole role) {
+        return createActiveAccount(role, "积分测试账户");
+    }
+
+    private AuthenticatedUser createActiveAccount(AccountRole role, String displayName) {
         UUID userId = UUID.randomUUID();
         String mobile = "139" + String.format("%08d", ThreadLocalRandom.current().nextInt(100_000_000));
         jdbcClient.sql("""
@@ -111,14 +135,14 @@ class WatchlistCreditServiceIntegrationTests {
                         """)
                 .param("userId", userId)
                 .param("mobile", mobile)
-                .param("displayName", "积分测试账户")
+                .param("displayName", displayName)
                 .param("passwordHash", "not-a-real-password-hash")
                 .param("role", role.name())
                 .update();
         return new AuthenticatedUser(
                 userId,
                 mobile,
-                "积分测试账户",
+                displayName,
                 role,
                 role == AccountRole.SYSTEM_ADMIN ? Set.of() : Set.of(PermissionCode.WATCHLIST_SELF_WRITE)
         );

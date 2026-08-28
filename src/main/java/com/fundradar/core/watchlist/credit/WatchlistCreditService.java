@@ -1,6 +1,7 @@
 package com.fundradar.core.watchlist.credit;
 
 import com.fundradar.core.auth.AuthenticatedUser;
+import com.fundradar.core.watchlist.api.WatchlistCreditLedgerPageResponse;
 import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
 
 import java.util.UUID;
@@ -22,6 +23,11 @@ public interface WatchlistCreditService {
 
     /** 历史关注迁移完成后，按目标账户最终关注数补齐迁移积分并同步锁定状态。 */
     void reconcileLegacyWatchlistTransfer(UUID targetUserId, AuthenticatedUser actor);
+
+    /** 系统管理员受控分页查看指定账户的积分流水；每次读取均写入审计。 */
+    WatchlistCreditLedgerPageResponse listCreditLedger(
+            UUID targetUserId, int page, int pageSize, AuthenticatedUser actor
+    );
 
     /** 仅由系统管理员发放正数试用关注积分，并返回目标用户最新额度。 */
     WatchlistQuotaResponse grantCredits(UUID targetUserId, int amount, String reason, AuthenticatedUser actor);
