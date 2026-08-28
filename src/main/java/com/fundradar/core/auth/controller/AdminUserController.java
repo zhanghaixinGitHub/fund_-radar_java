@@ -5,6 +5,7 @@ import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.auth.api.AdminUserPageResponse;
 import com.fundradar.core.auth.api.CreateUserRequest;
 import com.fundradar.core.auth.api.CurrentUserResponse;
+import com.fundradar.core.auth.api.GrantWatchlistCreditRequest;
 import com.fundradar.core.auth.api.ResetPasswordRequest;
 import com.fundradar.core.auth.api.TransferLegacyWatchlistRequest;
 import com.fundradar.core.auth.api.UpdateUserRoleRequest;
@@ -13,6 +14,8 @@ import com.fundradar.core.auth.service.AccountService;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.portfolio.api.PortfolioSnapshotResponse;
 import com.fundradar.core.portfolio.service.PortfolioSnapshotService;
+import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
+import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -42,10 +45,16 @@ public class AdminUserController {
 
     private final AccountService accountService;
     private final PortfolioSnapshotService portfolioSnapshotService;
+    private final WatchlistCreditService watchlistCreditService;
 
-    public AdminUserController(AccountService accountService, PortfolioSnapshotService portfolioSnapshotService) {
+    public AdminUserController(
+            AccountService accountService,
+            PortfolioSnapshotService portfolioSnapshotService,
+            WatchlistCreditService watchlistCreditService
+    ) {
         this.accountService = accountService;
         this.portfolioSnapshotService = portfolioSnapshotService;
+        this.watchlistCreditService = watchlistCreditService;
     }
 
     /** 分页查询账号及其本人关注数，不返回密码哈希或会话信息。 */
@@ -93,6 +102,17 @@ public class AdminUserController {
     ) {
         accountService.resetPassword(userId, request.newPassword(), CurrentUserContext.requirePermission(PermissionCode.USER_ACCOUNT_MANAGE));
         return ApiResponse.success(null);
+    }
+
+    /** 仅系统管理员可向启用账户发放试用关注积分；积分不是支付余额或投资权益。 */
+    @PostMapping("/users/{userId}/watchlist-credits")
+    public ApiResponse<WatchlistQuotaResponse> grantWatchlistCredits(
+            @PathVariable UUID userId,
+            @Valid @RequestBody GrantWatchlistCreditRequest request
+    ) {
+        return ApiResponse.success(watchlistCreditService.grantCredits(
+                userId, request.amount(), request.reason(), CurrentUserContext.requireAdministrator()
+        ));
     }
 
     /** 系统管理员查看指定用户最新确认的持仓快照，供人工受控核对个人持仓金额。 */

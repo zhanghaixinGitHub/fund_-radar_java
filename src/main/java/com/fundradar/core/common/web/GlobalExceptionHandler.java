@@ -9,6 +9,7 @@ import com.fundradar.core.integration.ai.AiServiceUnavailableException;
 import com.fundradar.core.integration.ai.MarketNavSyncInProgressException;
 import com.fundradar.core.integration.ai.FundNotFoundException;
 import com.fundradar.core.integration.ai.SyncJobNotFoundException;
+import com.fundradar.core.watchlist.credit.WatchlistQuotaExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -103,6 +104,14 @@ public class GlobalExceptionHandler {
         LOGGER.warn("GlobalExceptionHandler.handleMarketNavSyncInProgress   >>> {}", exception.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.failure("MARKET_SYNC_IN_PROGRESS", "已有基金市场同步正在执行，请稍后重试。"));
+    }
+
+    /** 当前用户超出免费额度及已发放试用积分支持的有效关注上限时返回稳定 409。 */
+    @ExceptionHandler(WatchlistQuotaExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleWatchlistQuotaExceeded(WatchlistQuotaExceededException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleWatchlistQuotaExceeded   >>> watchlist quota exceeded");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.failure("WATCHLIST_QUOTA_EXCEEDED", exception.getMessage()));
     }
 
     /** Python 服务重启后内存任务不存在时，提示用户重新发起而非伪造成同步失败。 */

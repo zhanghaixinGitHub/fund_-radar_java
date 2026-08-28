@@ -9,6 +9,7 @@ public record WatchlistPageResponse(
         int pageSize,
         long totalCount,
         int totalPages,
-        boolean marketDataUnavailable
+        boolean marketDataUnavailable,
+        WatchlistQuotaResponse quota
 ) {
 }

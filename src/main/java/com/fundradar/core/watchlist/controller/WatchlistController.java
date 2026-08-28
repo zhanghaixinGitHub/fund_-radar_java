@@ -21,8 +21,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 当前登录用户的关注列表接口；数据范围始终取服务端认证上下文。
  *
- * <p>关联文档：docs_zhx/requirements/fund-radar.md；
- * docs_zhx/design/fund-radar.md；docs_zhx/testcase/fund-radar.md。</p>
+ * <p>关联文档：docs_zhx/requirements/user-auth-and-access.md；
+ * docs_zhx/design/user-auth-and-access.md；docs_zhx/testcase/user-auth-and-access.md。</p>
  */
 @RestController
 @Validated

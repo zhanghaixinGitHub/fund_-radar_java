@@ -10,6 +10,7 @@ import com.fundradar.core.auth.api.AdminUserResponse;
 import com.fundradar.core.auth.api.CreateUserRequest;
 import com.fundradar.core.auth.api.CurrentUserResponse;
 import com.fundradar.core.common.trace.TraceContext;
+import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -43,11 +44,18 @@ public class AccountService {
     private final JdbcClient jdbcClient;
     private final PasswordEncoder passwordEncoder;
     private final AuthProperties authProperties;
+    private final WatchlistCreditService watchlistCreditService;
 
-    public AccountService(JdbcClient jdbcClient, PasswordEncoder passwordEncoder, AuthProperties authProperties) {
+    public AccountService(
+            JdbcClient jdbcClient,
+            PasswordEncoder passwordEncoder,
+            AuthProperties authProperties,
+            WatchlistCreditService watchlistCreditService
+    ) {
         this.jdbcClient = jdbcClient;
         this.passwordEncoder = passwordEncoder;
         this.authProperties = authProperties;
+        this.watchlistCreditService = watchlistCreditService;
     }
 
     /** 验证已注册手机号和密码并创建新会话；未知手机号不会触发账户创建。 */
@@ -164,12 +172,26 @@ public class AccountService {
     public AdminUserPageResponse listUsers(int page, int pageSize) {
         long total = jdbcClient.sql("SELECT COUNT(*) FROM user_account").query(Long.class).single();
         List<AdminUserResponse> users = jdbcClient.sql("""
+                        WITH credit_totals AS (
+                            SELECT user_id, COALESCE(SUM(credit_delta), 0) AS trial_credit_total
+                            FROM watchlist_credit_ledger
+                            GROUP BY user_id
+                        ), credit_locks AS (
+                            SELECT item.user_id, COUNT(*) AS trial_credit_locked
+                            FROM watchlist_credit_hold hold
+                            JOIN watchlist_item item ON item.watchlist_item_id = hold.watchlist_item_id
+                            GROUP BY item.user_id
+                        )
                         SELECT account.user_id, account.mobile, account.display_name, account.status, account.role,
-                               account.created_at, COUNT(watchlist.watchlist_item_id) AS watchlist_count
+                               account.created_at, COUNT(watchlist.watchlist_item_id) AS watchlist_count,
+                               COALESCE(credit_totals.trial_credit_total, 0) AS trial_credit_total,
+                               COALESCE(credit_locks.trial_credit_locked, 0) AS trial_credit_locked
                         FROM user_account account
                         LEFT JOIN watchlist_item watchlist ON watchlist.user_id = account.user_id
+                        LEFT JOIN credit_totals ON credit_totals.user_id = account.user_id
+                        LEFT JOIN credit_locks ON credit_locks.user_id = account.user_id
                         GROUP BY account.user_id, account.mobile, account.display_name, account.status, account.role,
-                                 account.created_at
+                                 account.created_at, credit_totals.trial_credit_total, credit_locks.trial_credit_locked
                         ORDER BY account.created_at DESC, account.user_id DESC
                         LIMIT :limit OFFSET :offset
                         """)
@@ -182,6 +204,9 @@ public class AccountService {
                         row.getString("status"),
                         AccountRole.valueOf(row.getString("role")),
                         row.getLong("watchlist_count"),
+                        row.getLong("trial_credit_total"),
+                        row.getLong("trial_credit_locked"),
+                        row.getLong("trial_credit_total") - row.getLong("trial_credit_locked"),
                         row.getTimestamp("created_at").toInstant(),
                         LegacyAccount.USER_ID.equals(row.getObject("user_id", UUID.class))
                 ))
@@ -308,6 +333,9 @@ public class AccountService {
                 .param("legacyUserId", LegacyAccount.USER_ID)
                 .param("targetUserId", targetUserId)
                 .update();
+        if (transferred > 0) {
+            watchlistCreditService.reconcileLegacyWatchlistTransfer(targetUserId, actor);
+        }
         writeAudit(actor.userId().toString(), "LEGACY_WATCHLIST_TRANSFERRED", targetUserId.toString());
         LOGGER.info("AccountService.transferLegacyWatchlist   >>> actorId={}, targetUserId={}, transferred={}",
                 actor.userId(), targetUserId, transferred);

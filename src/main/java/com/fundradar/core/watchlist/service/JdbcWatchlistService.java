@@ -10,6 +10,7 @@ import com.fundradar.core.integration.ai.AiServiceUnavailableException;
 import com.fundradar.core.watchlist.api.WatchlistFundItemResponse;
 import com.fundradar.core.watchlist.api.WatchlistItemResponse;
 import com.fundradar.core.watchlist.api.WatchlistPageResponse;
+import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -35,10 +36,16 @@ public class JdbcWatchlistService implements WatchlistService {
     private static final int TYPE_BACKFILL_BATCH_SIZE = 50;
     private final JdbcClient jdbcClient;
     private final AiFundClient aiFundClient;
+    private final WatchlistCreditService watchlistCreditService;
 
-    public JdbcWatchlistService(JdbcClient jdbcClient, AiFundClient aiFundClient) {
+    public JdbcWatchlistService(
+            JdbcClient jdbcClient,
+            AiFundClient aiFundClient,
+            WatchlistCreditService watchlistCreditService
+    ) {
         this.jdbcClient = jdbcClient;
         this.aiFundClient = aiFundClient;
+        this.watchlistCreditService = watchlistCreditService;
     }
 
     @Override
@@ -69,7 +76,9 @@ public class JdbcWatchlistService implements WatchlistService {
                 .map(record -> toPageItem(record, summaries.get(record.fundCode())))
                 .toList();
         int totalPages = (int) ((totalCount + pageSize - 1) / pageSize);
-        return new WatchlistPageResponse(items, page, pageSize, totalCount, totalPages, marketDataUnavailable);
+        return new WatchlistPageResponse(
+                items, page, pageSize, totalCount, totalPages, marketDataUnavailable, watchlistCreditService.getQuota(user)
+        );
     }
 
     @Override
@@ -96,12 +105,14 @@ public class JdbcWatchlistService implements WatchlistService {
     public WatchlistItemResponse addCurrentUserItem(String fundCode) {
         AuthenticatedUser user = CurrentUserContext.require();
         AiFundDetail fund = aiFundClient.getFund(fundCode);
+        watchlistCreditService.lockUserQuota(user);
+        UUID watchlistItemId = UUID.randomUUID();
         int inserted = jdbcClient.sql("""
                         INSERT INTO watchlist_item (watchlist_item_id, user_id, fund_code, fund_type)
                         VALUES (:itemId, :userId, :fundCode, :fundType)
                         ON CONFLICT (user_id, fund_code) DO NOTHING
                         """)
-                .param("itemId", UUID.randomUUID())
+                .param("itemId", watchlistItemId)
                 .param("userId", user.userId())
                 .param("fundCode", fundCode)
                 .param("fundType", fund.fundType())
@@ -116,6 +127,8 @@ public class JdbcWatchlistService implements WatchlistService {
                     .param("fundCode", fundCode)
                     .param("fundType", fund.fundType())
                     .update();
+        } else {
+            watchlistCreditService.reconcileAfterWatchlistChanged(user);
         }
         WatchlistItemResponse item = findRequiredItem(fundCode, user.userId());
         writeAudit(user, inserted == 1 ? "WATCHLIST_ADDED" : "WATCHLIST_ADD_IDEMPOTENT", fundCode);
@@ -129,13 +142,18 @@ public class JdbcWatchlistService implements WatchlistService {
     /** 幂等删除关注记录，并记录删除或重复删除审计。 */
     public void removeCurrentUserItem(String fundCode) {
         AuthenticatedUser user = CurrentUserContext.require();
-        int deleted = jdbcClient.sql("""
-                        DELETE FROM watchlist_item
-                        WHERE user_id = :userId AND fund_code = :fundCode
-                        """)
-                .param("userId", user.userId())
-                .param("fundCode", fundCode)
-                .update();
+        watchlistCreditService.lockUserQuota(user);
+        UUID watchlistItemId = findWatchlistItemId(fundCode, user.userId());
+        int deleted = 0;
+        if (watchlistItemId != null) {
+            watchlistCreditService.releaseItemHoldBeforeWatchlistDeletion(user, watchlistItemId);
+            deleted = jdbcClient.sql("DELETE FROM watchlist_item WHERE watchlist_item_id = :watchlistItemId")
+                    .param("watchlistItemId", watchlistItemId)
+                    .update();
+            if (deleted == 1) {
+                watchlistCreditService.reconcileAfterWatchlistChanged(user);
+            }
+        }
         writeAudit(user, deleted == 1 ? "WATCHLIST_REMOVED" : "WATCHLIST_REMOVE_IDEMPOTENT", fundCode);
         LOGGER.info("JdbcWatchlistService.removeCurrentUserItem   >>> userId={}, fundCode={}, deleted={}",
                 user.userId(), fundCode, deleted == 1);
@@ -156,6 +174,20 @@ public class JdbcWatchlistService implements WatchlistService {
                 ))
                 .optional()
                 .orElseThrow(() -> new IllegalStateException("watchlist insert did not produce a row"));
+    }
+
+    /** 当前用户范围内定位关注主键；为空代表重复取消，不能读取其他用户的记录。 */
+    private UUID findWatchlistItemId(String fundCode, UUID userId) {
+        return jdbcClient.sql("""
+                        SELECT watchlist_item_id
+                        FROM watchlist_item
+                        WHERE user_id = :userId AND fund_code = :fundCode
+                        """)
+                .param("userId", userId)
+                .param("fundCode", fundCode)
+                .query(UUID.class)
+                .optional()
+                .orElse(null);
     }
 
     /** 统计当前用户在可选类型筛选下的关注数，和分页查询共享完全相同的数据范围。 */

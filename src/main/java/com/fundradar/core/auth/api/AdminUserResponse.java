@@ -13,6 +13,9 @@ public record AdminUserResponse(
         String status,
         AccountRole role,
         long watchlistCount,
+        long trialCreditTotal,
+        long trialCreditLocked,
+        long trialCreditAvailable,
         Instant createdAt,
         boolean legacyRecord
 ) {
