@@ -59,7 +59,7 @@ public class FundController {
     @GetMapping
     public ApiResponse<FundPageResponse> listFunds(
             @RequestParam(required = false) @Size(max = 50) String keyword,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int pageSize,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) @Min(1) @Max(10_000) Integer page
     ) {

@@ -6,7 +6,7 @@ import com.fundradar.core.auth.service.AccountAlreadyExistsException;
 import com.fundradar.core.auth.service.AuthenticationRequiredException;
 import com.fundradar.core.auth.service.InvalidCredentialsException;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
-import com.fundradar.core.integration.ai.FocusedNavSyncInProgressException;
+import com.fundradar.core.integration.ai.MarketNavSyncInProgressException;
 import com.fundradar.core.integration.ai.FundNotFoundException;
 import com.fundradar.core.integration.ai.SyncJobNotFoundException;
 import org.slf4j.Logger;
@@ -98,11 +98,11 @@ public class GlobalExceptionHandler {
     }
 
     /** 将重复的人工同步请求转换为 409，避免用户重复触发外部调用。 */
-    @ExceptionHandler(FocusedNavSyncInProgressException.class)
-    public ResponseEntity<ApiResponse<Void>> handleFocusedNavSyncInProgress(FocusedNavSyncInProgressException exception) {
-        LOGGER.warn("GlobalExceptionHandler.handleFocusedNavSyncInProgress   >>> {}", exception.getMessage());
+    @ExceptionHandler(MarketNavSyncInProgressException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMarketNavSyncInProgress(MarketNavSyncInProgressException exception) {
+        LOGGER.warn("GlobalExceptionHandler.handleMarketNavSyncInProgress   >>> {}", exception.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ApiResponse.failure("FOCUSED_SYNC_IN_PROGRESS", "已有重点基金同步正在执行，请稍后重试。"));
+                .body(ApiResponse.failure("MARKET_SYNC_IN_PROGRESS", "已有基金市场同步正在执行，请稍后重试。"));
     }
 
     /** Python 服务重启后内存任务不存在时，提示用户重新发起而非伪造成同步失败。 */

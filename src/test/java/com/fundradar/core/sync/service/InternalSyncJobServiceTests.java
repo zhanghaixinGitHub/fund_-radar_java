@@ -19,7 +19,7 @@ class InternalSyncJobServiceTests {
     void mapsRunningJobWithoutInventingFinalCounts() {
         AiSyncJobStatus source = new AiSyncJobStatus(
                 UUID.fromString("00000000-0000-0000-0000-000000000401"),
-                "FOCUSED_NAV_INCREMENTAL",
+                "MARKET_NAV_INCREMENTAL",
                 "RUNNING",
                 LocalDate.of(2026, 8, 27),
                 List.of("002112.OF", "010710.OF"),
@@ -55,7 +55,7 @@ class InternalSyncJobServiceTests {
     void mapsFailedJobWithSafeActionableMessage() {
         AiSyncJobStatus source = new AiSyncJobStatus(
                 UUID.fromString("00000000-0000-0000-0000-000000000402"),
-                "FOCUSED_NAV_INCREMENTAL",
+                "MARKET_NAV_INCREMENTAL",
                 "FAILED",
                 LocalDate.of(2026, 8, 27),
                 List.of("002112.OF"),
@@ -68,8 +68,8 @@ class InternalSyncJobServiceTests {
                 0,
                 0,
                 0,
-                "FOCUSED_SYNC_BASELINE_MISSING",
-                "请先完成重点基金历史净值回填。",
+                "MARKET_SYNC_BASELINE_MISSING",
+                "请先完成基金市场历史净值回填或来源代码校验。",
                 Instant.parse("2026-08-27T12:00:00Z"),
                 Instant.parse("2026-08-27T12:01:00Z")
         );
@@ -77,8 +77,8 @@ class InternalSyncJobServiceTests {
         SyncJobResponse response = InternalSyncJobService.toResponse(source);
 
         assertEquals("FAILED", response.status());
-        assertEquals("FOCUSED_SYNC_BASELINE_MISSING", response.errorCode());
-        assertEquals("请先完成重点基金历史净值回填。", response.errorMessage());
+        assertEquals("MARKET_SYNC_BASELINE_MISSING", response.errorCode());
+        assertEquals("请先完成基金市场历史净值回填或来源代码校验。", response.errorMessage());
         assertEquals(source.finishedAt(), response.finishedAt());
     }
 }

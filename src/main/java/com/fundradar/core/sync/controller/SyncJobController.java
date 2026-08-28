@@ -32,19 +32,19 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 创建重点基金日净值增量任务，立即返回任务标识；实际执行在 Python 后台进行。 */
-    @PostMapping("/focused-nav-incremental")
-    public ResponseEntity<ApiResponse<SyncJobResponse>> startFocusedNavIncremental() {
+    /** 创建基金市场日净值增量任务，立即返回任务标识；实际执行在 Python 后台进行。 */
+    @PostMapping("/market-nav-incremental")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startMarketNavIncremental() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(ApiResponse.success(syncJobService.startFocusedNavIncremental()));
+                .body(ApiResponse.success(syncJobService.startMarketNavIncremental()));
     }
 
-    /** 查询当前 Python 进程最近一次重点基金同步任务；无任务时 data 为 null。 */
-    @GetMapping("/focused-nav-incremental/latest")
-    public ApiResponse<SyncJobResponse> getLatestFocusedNavIncremental() {
+    /** 查询当前 Python 进程最近一次基金市场同步任务；无任务时 data 为 null。 */
+    @GetMapping("/market-nav-incremental/latest")
+    public ApiResponse<SyncJobResponse> getLatestMarketNavIncremental() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
-        return ApiResponse.success(syncJobService.getLatestFocusedNavIncremental());
+        return ApiResponse.success(syncJobService.getLatestMarketNavIncremental());
     }
 
     /** 查询指定任务的阶段、当前基金、进度及完成后写入统计。 */

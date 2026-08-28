@@ -32,11 +32,11 @@ public class AiSyncJobClient {
                 .build();
     }
 
-    /** 创建重点基金日净值增量同步任务，立即返回任务标识和初始状态。 */
-    public AiSyncJobStatus startFocusedNavIncremental() {
+    /** 创建基金市场日净值增量同步任务，立即返回任务标识和初始状态。 */
+    public AiSyncJobStatus startMarketNavIncremental() {
         try {
             AiSyncJobStatus payload = restClient.post()
-                    .uri("/internal/v1/funds/sync-jobs/focused-nav-incremental")
+                    .uri("/internal/v1/funds/sync-jobs/market-nav-incremental")
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()
@@ -47,10 +47,10 @@ public class AiSyncJobClient {
             return payload;
         } catch (RestClientResponseException exception) {
             if (exception.getStatusCode().value() == 409) {
-                throw new FocusedNavSyncInProgressException("focused NAV sync is already running", exception);
+                throw new MarketNavSyncInProgressException("market NAV sync is already running", exception);
             }
             throw unavailable(exception);
-        } catch (AiServiceUnavailableException | FocusedNavSyncInProgressException exception) {
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             throw unavailable(exception);
@@ -83,10 +83,10 @@ public class AiSyncJobClient {
     }
 
     /** 查询 Python 当前进程最近一次任务；首次使用或服务重启后可为空。 */
-    public AiSyncJobStatus getLatestFocusedNavIncremental() {
+    public AiSyncJobStatus getLatestMarketNavIncremental() {
         try {
             return restClient.get()
-                    .uri("/internal/v1/funds/sync-jobs/focused-nav-incremental/latest")
+                    .uri("/internal/v1/funds/sync-jobs/market-nav-incremental/latest")
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()

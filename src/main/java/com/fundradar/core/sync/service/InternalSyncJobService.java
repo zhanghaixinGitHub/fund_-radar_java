@@ -23,18 +23,18 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
-    public SyncJobResponse startFocusedNavIncremental() {
-        SyncJobResponse response = toResponse(aiSyncJobClient.startFocusedNavIncremental());
+    public SyncJobResponse startMarketNavIncremental() {
+        SyncJobResponse response = toResponse(aiSyncJobClient.startMarketNavIncremental());
         LOGGER.info(
-                "InternalSyncJobService.startFocusedNavIncremental   >>> sync job started, jobId={}, status={}",
+                "InternalSyncJobService.startMarketNavIncremental   >>> sync job started, jobId={}, status={}",
                 response.jobId(), response.status()
         );
         return response;
     }
 
     @Override
-    public SyncJobResponse getLatestFocusedNavIncremental() {
-        AiSyncJobStatus source = aiSyncJobClient.getLatestFocusedNavIncremental();
+    public SyncJobResponse getLatestMarketNavIncremental() {
+        AiSyncJobStatus source = aiSyncJobClient.getLatestMarketNavIncremental();
         return source == null ? null : toResponse(source);
     }
 
