@@ -38,14 +38,14 @@ public class InternalFundQueryService implements FundQueryService {
 
     @Override
     /** 查询基金分页；无缓存的 AI 服务异常会继续抛出，不能伪造列表结果。 */
-    public FundPageResponse listFunds(String keyword, int pageSize, String cursor, Integer page) {
+    public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page) {
         try {
-            AiFundPage responsePage = aiFundClient.listFunds(keyword, pageSize, cursor, page);
+            AiFundPage responsePage = aiFundClient.listFunds(keyword, fundType, pageSize, cursor, page);
             FundPageResponse response = toPageResponse(responsePage);
-            fundReadCache.savePage(keyword, pageSize, cursor, page, response);
+            fundReadCache.savePage(keyword, fundType, pageSize, cursor, page, response);
             return response;
         } catch (AiServiceUnavailableException exception) {
-            return fundReadCache.findPage(keyword, pageSize, cursor, page)
+            return fundReadCache.findPage(keyword, fundType, pageSize, cursor, page)
                     .map(cached -> {
                         LOGGER.warn("InternalFundQueryService.listFunds   >>> serving stale fund page from cache");
                         return new FundPageResponse(
@@ -78,7 +78,9 @@ public class InternalFundQueryService implements FundQueryService {
                         FundDetailResponse data = cached.data();
                         return new FundDetailResponse(
                                 data.fundCode(), data.fundName(), data.fundType(), data.status(), data.asOfDate(),
-                                data.unitNav(), data.accumulatedNav(), data.navStatus(), data.dataSource(), true, cached.cachedAt()
+                                data.unitNav(), data.accumulatedNav(), data.navStatus(), data.dataSource(),
+                                data.dayChangeRate(), data.weekChangeRate(), data.monthChangeRate(), false,
+                                true, cached.cachedAt()
                         );
                     })
                     .orElseThrow(() -> exception);
@@ -118,6 +120,10 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.accumulatedNav(),
                 fund.navStatus(),
                 fund.dataSource(),
+                fund.dayChangeRate(),
+                fund.weekChangeRate(),
+                fund.monthChangeRate(),
+                false,
                 false,
                 null
         );
@@ -157,7 +163,11 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.fundName(),
                 fund.fundType(),
                 fund.status(),
-                fund.asOfDate()
+                fund.asOfDate(),
+                fund.dayChangeRate(),
+                fund.weekChangeRate(),
+                fund.monthChangeRate(),
+                false
         );
     }
 }

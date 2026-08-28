@@ -8,9 +8,11 @@ import com.fundradar.core.fund.api.FundEventPageResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
+import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.fund.service.FundEventQueryService;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.fund.service.FundSignalQueryService;
+import com.fundradar.core.watchlist.service.WatchlistService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
@@ -23,6 +25,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Set;
 
 /**
  * 基金读模型的 Java 对外接口。
@@ -41,15 +45,18 @@ public class FundController {
     private final FundQueryService fundQueryService;
     private final FundEventQueryService fundEventQueryService;
     private final FundSignalQueryService fundSignalQueryService;
+    private final WatchlistService watchlistService;
 
     public FundController(
             FundQueryService fundQueryService,
             FundEventQueryService fundEventQueryService,
-            FundSignalQueryService fundSignalQueryService
+            FundSignalQueryService fundSignalQueryService,
+            WatchlistService watchlistService
     ) {
         this.fundQueryService = fundQueryService;
         this.fundEventQueryService = fundEventQueryService;
         this.fundSignalQueryService = fundSignalQueryService;
+        this.watchlistService = watchlistService;
     }
 
     /**
@@ -61,21 +68,27 @@ public class FundController {
             @RequestParam(required = false) @Size(max = 50) String keyword,
             @RequestParam(defaultValue = "10") @Min(1) @Max(100) int pageSize,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false) @Min(1) @Max(10_000) Integer page
+            @RequestParam(required = false) @Min(1) @Max(10_000) Integer page,
+            @RequestParam(required = false) @jakarta.validation.constraints.Pattern(
+                    regexp = "^(BOND|STOCK|MIXED|INDEX|MONEY|QDII|FOF|OTHER)$",
+                    message = "基金类型筛选参数无效。"
+            ) String fundType
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         String normalizedCursor = cursor == null || cursor.isBlank() ? null : cursor;
         if (page != null && normalizedCursor != null) {
             throw new IllegalArgumentException("page 与 cursor 不能同时使用。");
         }
-        return ApiResponse.success(fundQueryService.listFunds(keyword, pageSize, normalizedCursor, page));
+        return ApiResponse.success(withWatchStatus(
+                fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
+        ));
     }
 
     /** 查询指定六位基金代码的详情；AI 服务不可用时可安全降级为缓存结果。 */
     @GetMapping("/{fundCode}")
     public ApiResponse<FundDetailResponse> getFund(@PathVariable @Size(min = 6, max = 6) String fundCode) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
-        return ApiResponse.success(fundQueryService.getFund(fundCode));
+        return ApiResponse.success(withWatchStatus(fundQueryService.getFund(fundCode)));
     }
 
     /** 查询基金历史净值；仅返回已落库的日净值，不触发数据同步或任何交易操作。 */
@@ -115,5 +128,35 @@ public class FundController {
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundSignalQueryService.listSignals(fundCode, pageSize, cursor));
+    }
+
+    /** 在共享基金读模型返回浏览器前，按当前会话批量附加本人关注标记，绝不写入 Redis 缓存。 */
+    private FundPageResponse withWatchStatus(FundPageResponse response) {
+        Set<String> watchedCodes = watchlistService.findCurrentUserFollowedFundCodes(
+                response.items().stream().map(FundSummaryResponse::fundCode).toList()
+        );
+        List<FundSummaryResponse> items = response.items().stream()
+                .map(item -> new FundSummaryResponse(
+                        item.fundCode(), item.fundName(), item.fundType(), item.status(), item.asOfDate(),
+                        item.dayChangeRate(), item.weekChangeRate(), item.monthChangeRate(),
+                        watchedCodes.contains(item.fundCode())
+                ))
+                .toList();
+        return new FundPageResponse(
+                items, response.nextCursor(), response.page(), response.pageSize(), response.totalCount(),
+                response.totalPages(), response.stale(), response.cachedAt()
+        );
+    }
+
+    /** 详情只追加当前用户自己的关注状态，避免页面为按钮状态拉取整份关注列表。 */
+    private FundDetailResponse withWatchStatus(FundDetailResponse response) {
+        boolean watched = watchlistService.findCurrentUserFollowedFundCodes(List.of(response.fundCode()))
+                .contains(response.fundCode());
+        return new FundDetailResponse(
+                response.fundCode(), response.fundName(), response.fundType(), response.status(), response.asOfDate(),
+                response.unitNav(), response.accumulatedNav(), response.navStatus(), response.dataSource(),
+                response.dayChangeRate(), response.weekChangeRate(), response.monthChangeRate(), watched,
+                response.stale(), response.cachedAt()
+        );
     }
 }

@@ -1,18 +1,18 @@
-package com.fundradar.core.fund.api;
+package com.fundradar.core.watchlist.api;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 
-/** Java 对外基金列表中的单条摘要，字段使用前端约定的 camelCase。 */
-public record FundSummaryResponse(
+/** 当前用户关注页中的一条基金展示摘要；行情字段只来自已落库净值读模型。 */
+public record WatchlistFundItemResponse(
         String fundCode,
         String fundName,
         String fundType,
-        String status,
         LocalDate asOfDate,
         BigDecimal dayChangeRate,
         BigDecimal weekChangeRate,
         BigDecimal monthChangeRate,
-        boolean isWatched
+        Instant createdAt
 ) {
 }

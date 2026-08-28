@@ -45,13 +45,15 @@ public class RedisFundReadCache {
     }
 
     /** 缓存一次成功的基金列表响应，并记录缓存生成时间。 */
-    public void savePage(String keyword, int pageSize, String cursor, Integer page, FundPageResponse response) {
-        save(pageKey(keyword, pageSize, cursor, page), new CachedPage(response, Instant.now()));
+    public void savePage(
+            String keyword, String fundType, int pageSize, String cursor, Integer page, FundPageResponse response
+    ) {
+        save(pageKey(keyword, fundType, pageSize, cursor, page), new CachedPage(response, Instant.now()));
     }
 
     /** 按完整查询维度读取基金列表缓存；未命中或缓存故障时返回空。 */
-    public Optional<CachedPage> findPage(String keyword, int pageSize, String cursor, Integer page) {
-        return find(pageKey(keyword, pageSize, cursor, page), CachedPage.class);
+    public Optional<CachedPage> findPage(String keyword, String fundType, int pageSize, String cursor, Integer page) {
+        return find(pageKey(keyword, fundType, pageSize, cursor, page), CachedPage.class);
     }
 
     /** 缓存一次成功的基金详情响应。 */
@@ -125,9 +127,9 @@ public class RedisFundReadCache {
         }
     }
 
-    /** 生成基金列表缓存键，关键字、游标和页码均隔离，避免不同分页模式串页。 */
-    private String pageKey(String keyword, int pageSize, String cursor, Integer page) {
-        return KEY_PREFIX + "page:k=" + encode(normalize(keyword)) + ":s=" + pageSize
+    /** 生成基金列表缓存键，关键字、类型、游标和页码均隔离，避免不同筛选结果串页。 */
+    private String pageKey(String keyword, String fundType, int pageSize, String cursor, Integer page) {
+        return KEY_PREFIX + "page:k=" + encode(normalize(keyword)) + ":t=" + encode(normalize(fundType)) + ":s=" + pageSize
                 + ":c=" + encode(normalize(cursor)) + ":p=" + (page == null ? "" : page);
     }
 

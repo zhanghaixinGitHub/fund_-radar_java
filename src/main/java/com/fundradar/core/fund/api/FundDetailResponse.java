@@ -19,6 +19,10 @@ public record FundDetailResponse(
         BigDecimal accumulatedNav,
         String navStatus,
         String dataSource,
+        BigDecimal dayChangeRate,
+        BigDecimal weekChangeRate,
+        BigDecimal monthChangeRate,
+        boolean isWatched,
         boolean stale,
         Instant cachedAt
 ) {

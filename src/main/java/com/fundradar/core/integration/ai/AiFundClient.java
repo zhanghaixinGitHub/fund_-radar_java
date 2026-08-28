@@ -3,6 +3,7 @@ package com.fundradar.core.integration.ai;
 import com.fundradar.core.common.trace.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -13,6 +14,8 @@ import org.springframework.web.util.UriBuilder;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
 
 /**
  * M0 基金内部读模型客户端。
@@ -42,16 +45,41 @@ public class AiFundClient {
      *
      * Python 返回 404 以外的调用失败统一转换为 AiServiceUnavailableException；空响应也视为不可用。
      */
-    public AiFundPage listFunds(String keyword, int pageSize, String cursor, Integer page) {
+    public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page) {
         try {
             AiFundPage payload = restClient.get()
-                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, pageSize, cursor, page))
+                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page))
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()
                     .body(AiFundPage.class);
             if (payload == null) {
                 throw new AiServiceUnavailableException("AI service returned an empty fund list", null);
+            }
+            return payload;
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RestClientResponseException exception) {
+            throw unavailable(exception);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    /** 批量查询指定基金的公开摘要，供 Java 组合当前用户关注页，避免逐行调用内部服务。 */
+    public List<AiFundSummary> listFundSummariesByCodes(Collection<String> fundCodes) {
+        if (fundCodes.isEmpty()) {
+            return List.of();
+        }
+        try {
+            List<AiFundSummary> payload = restClient.get()
+                    .uri(uriBuilder -> buildFundBatchUri(uriBuilder, fundCodes))
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty fund batch", null);
             }
             return payload;
         } catch (AiServiceUnavailableException exception) {
@@ -119,10 +147,15 @@ public class AiFundClient {
     }
 
     /** 根据可选关键字、游标或页码构造基金列表内部接口地址。 */
-    private URI buildFundListUri(UriBuilder uriBuilder, String keyword, int pageSize, String cursor, Integer page) {
+    private URI buildFundListUri(
+            UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page
+    ) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
         if (StringUtils.hasText(keyword)) {
             uriBuilder.queryParam("keyword", keyword);
+        }
+        if (StringUtils.hasText(fundType)) {
+            uriBuilder.queryParam("fundType", fundType);
         }
         if (StringUtils.hasText(cursor)) {
             uriBuilder.queryParam("cursor", cursor);
@@ -130,6 +163,13 @@ public class AiFundClient {
         if (page != null) {
             uriBuilder.queryParam("page", page);
         }
+        return uriBuilder.build();
+    }
+
+    /** 构造内部批量基金摘要地址；基金代码作为重复查询参数，不拼接未经编码的字符串。 */
+    private URI buildFundBatchUri(UriBuilder uriBuilder, Collection<String> fundCodes) {
+        uriBuilder.path("/internal/v1/funds/batch");
+        fundCodes.forEach(fundCode -> uriBuilder.queryParam("fundCode", fundCode));
         return uriBuilder.build();
     }
 

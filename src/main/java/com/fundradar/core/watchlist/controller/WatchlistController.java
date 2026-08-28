@@ -5,9 +5,11 @@ import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.watchlist.api.CreateWatchlistItemRequest;
 import com.fundradar.core.watchlist.api.WatchlistItemResponse;
+import com.fundradar.core.watchlist.api.WatchlistPageResponse;
 import com.fundradar.core.watchlist.service.WatchlistService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,8 +18,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-
 /**
  * 当前登录用户的关注列表接口；数据范围始终取服务端认证上下文。
  *
@@ -25,6 +25,7 @@ import java.util.List;
  * docs_zhx/design/fund-radar.md；docs_zhx/testcase/fund-radar.md。</p>
  */
 @RestController
+@Validated
 @RequestMapping("/api/v1/watchlist")
 public class WatchlistController {
 
@@ -34,11 +35,21 @@ public class WatchlistController {
         this.watchlistService = watchlistService;
     }
 
-    /** 查询当前登录用户已关注的全部基金。 */
+    /** 查询当前登录用户的关注基金分页；默认每页 10 条，类型筛选由服务端执行。 */
     @GetMapping
-    public ApiResponse<List<WatchlistItemResponse>> listWatchlist() {
+    public ApiResponse<WatchlistPageResponse> listWatchlist(
+            @org.springframework.web.bind.annotation.RequestParam(required = false)
+            @jakarta.validation.constraints.Pattern(
+                    regexp = "^(BOND|STOCK|MIXED|INDEX|MONEY|QDII|FOF|OTHER)$",
+                    message = "基金类型筛选参数无效。"
+            ) String fundType,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "1")
+            @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(10_000) int page,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "10")
+            @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(50) int pageSize
+    ) {
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
-        return ApiResponse.success(watchlistService.listCurrentUserItems());
+        return ApiResponse.success(watchlistService.listCurrentUserItems(fundType, page, pageSize));
     }
 
     /** 将基金加入当前本地用户的关注列表；重复添加为幂等操作。 */

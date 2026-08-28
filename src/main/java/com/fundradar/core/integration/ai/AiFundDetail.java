@@ -15,6 +15,9 @@ public record AiFundDetail(
         @JsonProperty("unit_nav") BigDecimal unitNav,
         @JsonProperty("accumulated_nav") BigDecimal accumulatedNav,
         @JsonProperty("nav_status") String navStatus,
-        @JsonProperty("data_source") String dataSource
+        @JsonProperty("data_source") String dataSource,
+        @JsonProperty("day_change_rate") BigDecimal dayChangeRate,
+        @JsonProperty("week_change_rate") BigDecimal weekChangeRate,
+        @JsonProperty("month_change_rate") BigDecimal monthChangeRate
 ) {
 }

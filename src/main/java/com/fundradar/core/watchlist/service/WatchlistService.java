@@ -1,8 +1,11 @@
 package com.fundradar.core.watchlist.service;
 
 import com.fundradar.core.watchlist.api.WatchlistItemResponse;
+import com.fundradar.core.watchlist.api.WatchlistPageResponse;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 当前用户关注列表的读写服务接口。
@@ -11,8 +14,11 @@ import java.util.List;
  */
 public interface WatchlistService {
 
-    /** 查询当前用户已关注的基金，按创建时间倒序返回。 */
-    List<WatchlistItemResponse> listCurrentUserItems();
+    /** 查询当前用户已关注的基金，按类型连续分组并以页码返回。 */
+    WatchlistPageResponse listCurrentUserItems(String fundType, int page, int pageSize);
+
+    /** 从当前认证用户范围内批量判断哪些基金已关注，供基金市场和详情页追加展示状态。 */
+    Set<String> findCurrentUserFollowedFundCodes(Collection<String> fundCodes);
 
     /** 校验基金存在后将其加入当前用户关注列表；重复提交不创建重复数据。 */
     WatchlistItemResponse addCurrentUserItem(String fundCode);

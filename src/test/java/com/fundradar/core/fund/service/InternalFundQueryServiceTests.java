@@ -30,7 +30,10 @@ class InternalFundQueryServiceTests {
                 new BigDecimal("4.89360000"),
                 new BigDecimal("4.89360000"),
                 "SYNCED",
-                "TUSHARE_PRO_FUND"
+                "TUSHARE_PRO_FUND",
+                new BigDecimal("0.01000000"),
+                new BigDecimal("0.02000000"),
+                new BigDecimal("0.03000000")
         );
 
         FundDetailResponse response = InternalFundQueryService.toDetailResponse(source);
@@ -38,6 +41,7 @@ class InternalFundQueryServiceTests {
         assertEquals(new BigDecimal("4.89360000"), response.unitNav());
         assertEquals(new BigDecimal("4.89360000"), response.accumulatedNav());
         assertEquals("TUSHARE_PRO_FUND", response.dataSource());
+        assertEquals(new BigDecimal("0.01000000"), response.dayChangeRate());
         assertFalse(response.stale());
     }
 
@@ -62,7 +66,8 @@ class InternalFundQueryServiceTests {
     void mapsPageMetadataForDirectPageJump() {
         AiFundPage source = new AiFundPage(
                 java.util.List.of(new AiFundSummary(
-                        "010710", "安信医药健康主题股票C", "STOCK", "ACTIVE", LocalDate.of(2026, 8, 26)
+                        "010710", "安信医药健康主题股票C", "STOCK", "ACTIVE", LocalDate.of(2026, 8, 26),
+                        new BigDecimal("0.01000000"), new BigDecimal("0.02000000"), new BigDecimal("0.03000000")
                 )),
                 null,
                 3,
@@ -78,6 +83,7 @@ class InternalFundQueryServiceTests {
         assertEquals(43, response.totalCount());
         assertEquals(5, response.totalPages());
         assertEquals("010710", response.items().get(0).fundCode());
+        assertEquals(new BigDecimal("0.02000000"), response.items().get(0).weekChangeRate());
         assertFalse(response.stale());
     }
 }
