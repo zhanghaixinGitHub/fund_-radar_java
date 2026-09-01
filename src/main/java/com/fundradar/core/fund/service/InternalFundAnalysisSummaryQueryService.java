@@ -1,17 +1,23 @@
 package com.fundradar.core.fund.service;
 
 import com.fundradar.core.fund.api.FundAnalysisSummaryResponse;
+import com.fundradar.core.fund.api.FundAnalysisExplanationEvidenceResponse;
+import com.fundradar.core.fund.api.FundAnalysisExplanationResponse;
 import com.fundradar.core.fund.api.FundBacktestSummaryResponse;
 import com.fundradar.core.fund.api.FundModelAnalysisSummaryResponse;
 import com.fundradar.core.fund.cache.RedisFundReadCache;
 import com.fundradar.core.integration.ai.AiBacktestSummary;
 import com.fundradar.core.integration.ai.AiFundAnalysisSummary;
+import com.fundradar.core.integration.ai.AiFundExplanation;
+import com.fundradar.core.integration.ai.AiFundExplanationEvidence;
 import com.fundradar.core.integration.ai.AiModelAnalysisSummary;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
 import com.fundradar.core.integration.ai.AiSignalClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 /**
  * M3-06 已发布模型与回测摘要的内部读模型实现。
@@ -54,7 +60,7 @@ public class InternalFundAnalysisSummaryQueryService implements FundAnalysisSumm
     static FundAnalysisSummaryResponse toResponse(AiFundAnalysisSummary source) {
         return new FundAnalysisSummaryResponse(
                 source.fundCode(), source.fundType(), source.availabilityStatus(), source.message(),
-                toModel(source.model()), toBacktest(source.backtest()), false, null
+                toModel(source.model()), toBacktest(source.backtest()), toExplanation(source.explanation()), false, null
         );
     }
 
@@ -81,11 +87,26 @@ public class InternalFundAnalysisSummaryQueryService implements FundAnalysisSumm
         );
     }
 
+    /** 显式白名单映射已持久化解释，不能把 Python 原始模型响应透传到浏览器。 */
+    private static FundAnalysisExplanationResponse toExplanation(AiFundExplanation source) {
+        if (source == null) {
+            return null;
+        }
+        List<AiFundExplanationEvidence> evidence = source.evidence() == null ? List.of() : source.evidence();
+        return new FundAnalysisExplanationResponse(
+                source.explanationId(), source.forecastId(), source.asOfDate(), source.provider(), source.providerModel(),
+                source.promptVersion(), source.overview(), evidence.stream()
+                        .map(item -> new FundAnalysisExplanationEvidenceResponse(item.label(), item.detail()))
+                        .toList(),
+                source.riskNotice(), source.dataGap(), source.disclaimer(), source.generatedAt()
+        );
+    }
+
     /** 缓存降级时保留已披露的状态与回测事实，仅追加陈旧标识。 */
     private FundAnalysisSummaryResponse withStaleState(FundAnalysisSummaryResponse response, java.time.Instant cachedAt) {
         return new FundAnalysisSummaryResponse(
                 response.fundCode(), response.fundType(), response.availabilityStatus(), response.message(),
-                response.model(), response.backtest(), true, cachedAt
+                response.model(), response.backtest(), response.explanation(), true, cachedAt
         );
     }
 }

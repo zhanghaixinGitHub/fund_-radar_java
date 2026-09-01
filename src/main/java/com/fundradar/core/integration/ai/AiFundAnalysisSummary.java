@@ -9,6 +9,19 @@ public record AiFundAnalysisSummary(
         @JsonProperty("availability_status") String availabilityStatus,
         String message,
         AiModelAnalysisSummary model,
-        AiBacktestSummary backtest
+        AiBacktestSummary backtest,
+        AiFundExplanation explanation
 ) {
+
+    /** 兼容尚未返回解释字段的历史 Python 响应和既有测试。 */
+    public AiFundAnalysisSummary(
+            String fundCode,
+            String fundType,
+            String availabilityStatus,
+            String message,
+            AiModelAnalysisSummary model,
+            AiBacktestSummary backtest
+    ) {
+        this(fundCode, fundType, availabilityStatus, message, model, backtest, null);
+    }
 }

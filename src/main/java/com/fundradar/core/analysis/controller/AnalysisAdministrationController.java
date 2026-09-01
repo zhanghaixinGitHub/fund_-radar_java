@@ -5,6 +5,7 @@ import com.fundradar.core.analysis.api.BenchmarkPointImportRequest;
 import com.fundradar.core.analysis.api.BenchmarkRegistrationRequest;
 import com.fundradar.core.analysis.api.ModelReleaseTransitionRequest;
 import com.fundradar.core.analysis.api.StartRollingBacktestRequest;
+import com.fundradar.core.analysis.api.StartFundExplanationRequest;
 import com.fundradar.core.analysis.service.AnalysisAdministrationService;
 import com.fundradar.core.auth.AuthenticatedUser;
 import com.fundradar.core.auth.CurrentUserContext;
@@ -52,6 +53,21 @@ public class AnalysisAdministrationController {
                 analysisAdministrationService.startRollingBacktest(
                         safeRequest.resolvedFeeRate(), safeRequest.resolvedBenchmarkCode(), administrator
                 )
+        ));
+    }
+
+    /**
+     * 排队已发布评分的 DeepSeek V4-Pro 解释，不能改变数值评分、回测或模型发布状态。
+     * 关联：docs_zhx/requirements/m3-decision-assistance.md、docs_zhx/design/m3-decision-assistance.md、
+     * docs_zhx/testcase/m3-decision-assistance.md。
+     */
+    @PostMapping("/runs/fund-explanations")
+    public ResponseEntity<ApiResponse<AiAnalysisRunStatus>> startFundExplanation(
+            @Valid @RequestBody StartFundExplanationRequest request
+    ) {
+        AuthenticatedUser administrator = CurrentUserContext.requireAdministrator();
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(
+                analysisAdministrationService.startFundExplanation(request.fundCode(), administrator)
         ));
     }
 

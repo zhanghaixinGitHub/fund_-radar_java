@@ -53,6 +53,18 @@ public class AnalysisAdministrationService {
         return status;
     }
 
+    /** 请求生成已发布评分的 DeepSeek 解释，并仅审计管理员和基金代码。 */
+    public AiAnalysisRunStatus startFundExplanation(String fundCode, AuthenticatedUser administrator) {
+        writeAudit(administrator, "ANALYSIS_DEEPSEEK_EXPLANATION_REQUESTED", fundCode);
+        AiAnalysisRunStatus status = aiAnalysisClient.startFundExplanation(fundCode);
+        writeAudit(administrator, "ANALYSIS_DEEPSEEK_EXPLANATION_QUEUED", status.analysisRunId().toString());
+        LOGGER.info(
+                "AnalysisAdministrationService.startFundExplanation   >>> administratorId={}, fundCode={}, analysisRunId={}",
+                administrator.userId(), fundCode, status.analysisRunId()
+        );
+        return status;
+    }
+
     /** 仅读取候选回测基准摘要；不向浏览器暴露 Python 或来源凭证。 */
     public List<AiBenchmarkSeriesStatus> listStockBenchmarks() {
         return aiAnalysisClient.listStockBenchmarks();

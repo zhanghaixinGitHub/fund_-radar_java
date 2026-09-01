@@ -64,6 +64,27 @@ public class AiAnalysisClient {
         }
     }
 
+    /** 仅排队一只基金的已发布评分解释；Python 决定是否存在合规输入及是否调用 DeepSeek。 */
+    public AiAnalysisRunStatus startFundExplanation(String fundCode) {
+        try {
+            AiAnalysisRunStatus payload = restClient.post()
+                    .uri("/internal/v1/analysis/runs/fund-explanations")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .body(Map.of("fund_code", fundCode))
+                    .retrieve()
+                    .body(AiAnalysisRunStatus.class);
+            return requirePayload(payload, "AI service returned an empty explanation run");
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 409) {
+                throw new AnalysisOperationConflictException("analysis operation was rejected by its current state", exception);
+            }
+            throw unavailable(exception);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 列出本地登记基准的状态和覆盖摘要；不读取日序列。 */
     public List<AiBenchmarkSeriesStatus> listStockBenchmarks() {
         try {
