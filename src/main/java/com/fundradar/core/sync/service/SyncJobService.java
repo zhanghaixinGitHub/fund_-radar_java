@@ -15,11 +15,17 @@ public interface SyncJobService {
     /** 创建基金市场完整资料同步任务。 */
     SyncJobResponse startMarketDetails();
 
+    /** 创建已落库净值的特征快照手动重试任务。 */
+    SyncJobResponse startStockFeatureSnapshots();
+
     /** 查询当前 Python 进程最近一次基金市场净值同步任务。 */
     SyncJobResponse getLatestMarketNavIncremental();
 
     /** 查询当前 Python 进程最近一次基金市场完整资料同步任务。 */
     SyncJobResponse getLatestMarketDetails();
+
+    /** 查询当前 Python 进程最近一次特征快照任务。 */
+    SyncJobResponse getLatestStockFeatureSnapshots();
 
     /** 查询每类同步任务最近一次完整成功的持久化时间。 */
     List<SyncJobLastSuccessResponse> getLastSuccessfulSyncTimes();

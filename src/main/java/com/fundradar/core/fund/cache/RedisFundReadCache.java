@@ -2,6 +2,7 @@ package com.fundradar.core.fund.cache;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
+import com.fundradar.core.fund.api.FundFeatureStatusResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
@@ -98,6 +99,16 @@ public class RedisFundReadCache {
         return find(signalPageKey(fundCode, pageSize, cursor), CachedSignalPage.class);
     }
 
+    /** 缓存一次成功的 M3-G1 特征状态响应。 */
+    public void saveFeatureStatus(String fundCode, FundFeatureStatusResponse response) {
+        save(featureStatusKey(fundCode), new CachedFeatureStatus(response, Instant.now()));
+    }
+
+    /** 读取指定基金最后一次成功的 M3-G1 特征状态缓存。 */
+    public Optional<CachedFeatureStatus> findFeatureStatus(String fundCode) {
+        return find(featureStatusKey(fundCode), CachedFeatureStatus.class);
+    }
+
     /** 将对象序列化到 Redis；缓存故障仅记录告警，不影响主查询成功结果。 */
     private void save(String key, Object value) {
         if (!properties.isEnabled()) {
@@ -153,6 +164,11 @@ public class RedisFundReadCache {
         return KEY_PREFIX + "signals:f=" + fundCode + ":s=" + pageSize + ":c=" + encode(normalize(cursor));
     }
 
+    /** 生成按基金代码隔离的 M3-G1 特征状态缓存键。 */
+    private String featureStatusKey(String fundCode) {
+        return KEY_PREFIX + "features:f=" + fundCode;
+    }
+
     /** 将 null 统一为空字符串并去除首尾空白，确保同义查询使用同一缓存键。 */
     private String normalize(String value) {
         return value == null ? "" : value.strip();
@@ -181,5 +197,9 @@ public class RedisFundReadCache {
 
     /** M3 评分结果分页缓存值及其生成时间。 */
     public record CachedSignalPage(FundSignalPageResponse data, Instant cachedAt) {
+    }
+
+    /** M3-G1 特征状态缓存值及其生成时间。 */
+    public record CachedFeatureStatus(FundFeatureStatusResponse data, Instant cachedAt) {
     }
 }

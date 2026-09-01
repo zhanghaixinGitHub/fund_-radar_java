@@ -50,6 +50,14 @@ public class SyncJobController {
                 .body(ApiResponse.success(syncJobService.startMarketDetails()));
     }
 
+    /** 创建特征快照同步任务；该任务只读取已落库净值，不发起外部市场调用。 */
+    @PostMapping("/stock-feature-snapshots")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startStockFeatureSnapshots() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startStockFeatureSnapshots()));
+    }
+
     /** 查询当前 Python 进程最近一次基金市场同步任务；无任务时 data 为 null。 */
     @GetMapping("/market-nav-incremental/latest")
     public ApiResponse<SyncJobResponse> getLatestMarketNavIncremental() {
@@ -62,6 +70,13 @@ public class SyncJobController {
     public ApiResponse<SyncJobResponse> getLatestMarketDetails() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
         return ApiResponse.success(syncJobService.getLatestMarketDetails());
+    }
+
+    /** 查询当前 Python 进程最近一次特征快照任务；无任务时 data 为 null。 */
+    @GetMapping("/stock-feature-snapshots/latest")
+    public ApiResponse<SyncJobResponse> getLatestStockFeatureSnapshots() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestStockFeatureSnapshots());
     }
 
     /** 查询两类任务最近一次完整成功的持久化时间。 */

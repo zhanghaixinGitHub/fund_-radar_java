@@ -5,12 +5,14 @@ import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
+import com.fundradar.core.fund.api.FundFeatureStatusResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.fund.service.FundEventQueryService;
+import com.fundradar.core.fund.service.FundFeatureStatusQueryService;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.fund.service.FundSignalQueryService;
 import com.fundradar.core.watchlist.service.WatchlistService;
@@ -46,17 +48,20 @@ public class FundController {
 
     private final FundQueryService fundQueryService;
     private final FundEventQueryService fundEventQueryService;
+    private final FundFeatureStatusQueryService fundFeatureStatusQueryService;
     private final FundSignalQueryService fundSignalQueryService;
     private final WatchlistService watchlistService;
 
     public FundController(
             FundQueryService fundQueryService,
             FundEventQueryService fundEventQueryService,
+            FundFeatureStatusQueryService fundFeatureStatusQueryService,
             FundSignalQueryService fundSignalQueryService,
             WatchlistService watchlistService
     ) {
         this.fundQueryService = fundQueryService;
         this.fundEventQueryService = fundEventQueryService;
+        this.fundFeatureStatusQueryService = fundFeatureStatusQueryService;
         this.fundSignalQueryService = fundSignalQueryService;
         this.watchlistService = watchlistService;
     }
@@ -136,6 +141,15 @@ public class FundController {
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundEventQueryService.listEvents(fundCode, pageSize, cursor));
+    }
+
+    /** 查询已落库的 M3-G1 特征状态，不触发特征构建、评分或任何交易操作。 */
+    @GetMapping("/{fundCode}/feature-status")
+    public ApiResponse<FundFeatureStatusResponse> getLatestFeatureStatus(
+            @PathVariable @Size(min = 6, max = 6) String fundCode
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(fundFeatureStatusQueryService.getLatestFeatureStatus(fundCode));
     }
 
     /** 查询指定基金已持久化的 M3 评分结果，不触发模型计算或交易操作。 */

@@ -45,6 +45,16 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startStockFeatureSnapshots() {
+        SyncJobResponse response = toResponse(aiSyncJobClient.startStockFeatureSnapshots());
+        LOGGER.info(
+                "InternalSyncJobService.startStockFeatureSnapshots   >>> sync job started, jobId={}, status={}",
+                response.jobId(), response.status()
+        );
+        return response;
+    }
+
+    @Override
     public SyncJobResponse getLatestMarketNavIncremental() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestMarketNavIncremental();
         return source == null ? null : toResponse(source);
@@ -53,6 +63,12 @@ public class InternalSyncJobService implements SyncJobService {
     @Override
     public SyncJobResponse getLatestMarketDetails() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestMarketDetails();
+        return source == null ? null : toResponse(source);
+    }
+
+    @Override
+    public SyncJobResponse getLatestStockFeatureSnapshots() {
+        AiSyncJobStatus source = aiSyncJobClient.getLatestStockFeatureSnapshots();
         return source == null ? null : toResponse(source);
     }
 

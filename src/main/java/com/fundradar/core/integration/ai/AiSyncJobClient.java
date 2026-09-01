@@ -84,6 +84,31 @@ public class AiSyncJobClient {
         }
     }
 
+    /** 创建已落库净值的特征快照任务，不触发任何外部市场数据拉取。 */
+    public AiSyncJobStatus startStockFeatureSnapshots() {
+        try {
+            AiSyncJobStatus payload = restClient.post()
+                    .uri("/internal/v1/funds/sync-jobs/stock-feature-snapshots")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiSyncJobStatus.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty sync job", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 409) {
+                throw new MarketNavSyncInProgressException("feature snapshot sync is already running", exception);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 查询指定同步任务的最新进度；读取本身不会重新触发外部数据请求。 */
     public AiSyncJobStatus getSyncJob(UUID jobId) {
         try {
@@ -130,6 +155,22 @@ public class AiSyncJobClient {
         try {
             return restClient.get()
                     .uri("/internal/v1/funds/sync-jobs/market-details/latest")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiSyncJobStatus.class);
+        } catch (RestClientResponseException exception) {
+            throw unavailable(exception);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    /** 查询 Python 当前进程最近一次特征快照任务；首次使用或服务重启后可为空。 */
+    public AiSyncJobStatus getLatestStockFeatureSnapshots() {
+        try {
+            return restClient.get()
+                    .uri("/internal/v1/funds/sync-jobs/stock-feature-snapshots/latest")
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()

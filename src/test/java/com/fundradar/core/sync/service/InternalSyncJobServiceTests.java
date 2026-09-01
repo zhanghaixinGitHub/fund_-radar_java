@@ -81,4 +81,34 @@ class InternalSyncJobServiceTests {
         assertEquals("请先完成基金市场历史净值回填或来源代码校验。", response.errorMessage());
         assertEquals(source.finishedAt(), response.finishedAt());
     }
+
+    @Test
+    void mapsPartialSuccessWithoutHidingTheSourceSyncRun() {
+        AiSyncJobStatus source = new AiSyncJobStatus(
+                UUID.fromString("00000000-0000-0000-0000-000000000403"),
+                "MARKET_NAV_INCREMENTAL",
+                "PARTIAL_SUCCESS",
+                LocalDate.of(2026, 9, 1),
+                List.of(),
+                2,
+                2,
+                null,
+                "基金市场净值同步完成，特征快照未更新",
+                UUID.fromString("00000000-0000-0000-0000-000000000304"),
+                3,
+                1,
+                1,
+                1,
+                "FEATURE_SNAPSHOT_BUILD_FAILED",
+                "基金市场净值已同步，但特征快照未生成，可在同步中心单独重试。",
+                Instant.parse("2026-09-01T12:00:00Z"),
+                Instant.parse("2026-09-01T12:01:00Z")
+        );
+
+        SyncJobResponse response = InternalSyncJobService.toResponse(source);
+
+        assertEquals("PARTIAL_SUCCESS", response.status());
+        assertEquals(source.syncRunId(), response.syncRunId());
+        assertEquals("FEATURE_SNAPSHOT_BUILD_FAILED", response.errorCode());
+    }
 }
