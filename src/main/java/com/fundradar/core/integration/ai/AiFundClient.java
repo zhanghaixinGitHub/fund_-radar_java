@@ -176,6 +176,56 @@ public class AiFundClient {
         }
     }
 
+    /** 查询一只已关注基金在明确日期窗口内的已落库份额规模历史。 */
+    public AiFundShareHistory getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+        try {
+            AiFundShareHistory payload = restClient.get()
+                    .uri(uriBuilder -> buildFundShareHistoryUri(uriBuilder, fundCode, startDate, endDate))
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFundShareHistory.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty share history", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 404) {
+                throw new FundNotFoundException(fundCode);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    /** 查询受控当前基金市场样本内的同类型比较，不执行全市场检索。 */
+    public AiFundSameTypeComparison getFundSameTypeComparison(String fundCode) {
+        try {
+            AiFundSameTypeComparison payload = restClient.get()
+                    .uri("/internal/v1/funds/{fundCode}/same-type-comparison", fundCode)
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFundSameTypeComparison.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty same-type comparison", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 404) {
+                throw new FundNotFoundException(fundCode);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 根据可选关键字、游标或页码构造基金列表内部接口地址。 */
     private URI buildFundListUri(
             UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page
@@ -208,6 +258,16 @@ public class AiFundClient {
             UriBuilder uriBuilder, String fundCode, LocalDate startDate, LocalDate endDate
     ) {
         return uriBuilder.path("/internal/v1/funds/{fundCode}/nav-history")
+                .queryParam("startDate", startDate)
+                .queryParam("endDate", endDate)
+                .build(fundCode);
+    }
+
+    /** 构造内部份额规模历史查询地址，日期范围始终由 Java 对外层校验后传入。 */
+    private URI buildFundShareHistoryUri(
+            UriBuilder uriBuilder, String fundCode, LocalDate startDate, LocalDate endDate
+    ) {
+        return uriBuilder.path("/internal/v1/funds/{fundCode}/share-history")
                 .queryParam("startDate", startDate)
                 .queryParam("endDate", endDate)
                 .build(fundCode);

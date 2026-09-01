@@ -6,6 +6,9 @@ import com.fundradar.core.fund.api.FundManagerResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundNavPointResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonItemResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
+import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.fund.api.FundShareSnapshotResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
@@ -14,6 +17,8 @@ import com.fundradar.core.integration.ai.AiFundDetail;
 import com.fundradar.core.integration.ai.AiFundWatchlistDetail;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundPage;
+import com.fundradar.core.integration.ai.AiFundSameTypeComparison;
+import com.fundradar.core.integration.ai.AiFundShareHistory;
 import com.fundradar.core.integration.ai.AiFundSummary;
 import com.fundradar.core.integration.ai.AiServiceUnavailableException;
 import com.fundradar.core.fund.cache.RedisFundReadCache;
@@ -117,6 +122,18 @@ public class InternalFundQueryService implements FundQueryService {
         }
     }
 
+    @Override
+    /** 查询受控同类型比较；不进入共享缓存，避免把当前样本范围误用为长期排名。 */
+    public FundSameTypeComparisonResponse getFundSameTypeComparison(String fundCode) {
+        return toSameTypeComparisonResponse(aiFundClient.getFundSameTypeComparison(fundCode));
+    }
+
+    @Override
+    /** 查询关注后份额历史；调用方已鉴权且不写入共享 Redis。 */
+    public FundShareHistoryResponse getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+        return toShareHistoryResponse(aiFundClient.getFundShareHistory(fundCode, startDate, endDate));
+    }
+
     /** 将 Python 内部详情转换为 Java 对外详情，并标记为实时结果。 */
     static FundDetailResponse toDetailResponse(AiFundDetail fund) {
         return new FundDetailResponse(
@@ -205,6 +222,36 @@ public class InternalFundQueryService implements FundQueryService {
                         .toList(),
                 false,
                 null
+        );
+    }
+
+    /** 将 Python 份额规模历史映射为浏览器契约，保留来源与未同步状态。 */
+    static FundShareHistoryResponse toShareHistoryResponse(AiFundShareHistory history) {
+        return new FundShareHistoryResponse(
+                history.status(),
+                history.items().stream()
+                        .map(item -> new FundShareSnapshotResponse(
+                                item.tradeDate(), item.fundShare(), item.dataSource()
+                        ))
+                        .toList()
+        );
+    }
+
+    /** 将 Python 受控同类型比较映射为浏览器契约，不改写范围或排名语义。 */
+    static FundSameTypeComparisonResponse toSameTypeComparisonResponse(AiFundSameTypeComparison comparison) {
+        return new FundSameTypeComparisonResponse(
+                comparison.fundType(),
+                comparison.scope(),
+                comparison.status(),
+                comparison.asOfDate(),
+                comparison.targetRank(),
+                comparison.comparableCount(),
+                comparison.items().stream()
+                        .map(item -> new FundSameTypeComparisonItemResponse(
+                                item.rank(), item.fundCode(), item.fundName(), item.fundType(), item.asOfDate(),
+                                item.monthChangeRate(), item.dataSource()
+                        ))
+                        .toList()
         );
     }
 

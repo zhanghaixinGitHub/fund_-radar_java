@@ -3,6 +3,7 @@ package com.fundradar.core.watchlist.controller;
 import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
+import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.watchlist.api.CreateWatchlistItemRequest;
@@ -19,8 +20,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.format.annotation.DateTimeFormat;
 
+import java.time.LocalDate;
+import java.util.List;
 /**
  * 当前登录用户的关注列表接口；数据范围始终取服务端认证上下文。
  *
@@ -71,12 +76,31 @@ public class WatchlistController {
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
-        boolean followed = watchlistService.findCurrentUserFollowedFundCodes(java.util.List.of(fundCode))
-                .contains(fundCode);
-        if (!followed) {
-            throw new WatchlistRequiredException();
-        }
+        requireCurrentUserFollowedFund(fundCode);
         return ApiResponse.success(fundQueryService.getWatchlistFundDetail(fundCode).withWatchStatus());
+    }
+
+    /**
+     * 查询当前用户已关注基金的份额规模历史；只读本地快照，不能通过详情接口绕过关注关系。
+     * 关联文档：docs_zhx/requirements/fund-detail-expansion.md、
+     * docs_zhx/design/fund-detail-expansion.md、docs_zhx/testcase/fund-detail-expansion.md。
+     */
+    @GetMapping("/{fundCode}/share-history")
+    public ApiResponse<FundShareHistoryResponse> getCurrentUserFundShareHistory(
+            @PathVariable @Pattern(regexp = "^\\d{6}$", message = "基金代码必须为 6 位数字。") String fundCode,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
+        if (endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException("结束日期不得早于开始日期。");
+        }
+        if (startDate.plusDays(5_000).isBefore(endDate)) {
+            throw new IllegalArgumentException("基金份额规模查询窗口过大。");
+        }
+        requireCurrentUserFollowedFund(fundCode);
+        return ApiResponse.success(fundQueryService.getFundShareHistory(fundCode, startDate, endDate));
     }
 
     /** 将基金加入当前本地用户的关注列表；重复添加为幂等操作。 */
@@ -96,5 +120,13 @@ public class WatchlistController {
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_WRITE);
         watchlistService.removeCurrentUserItem(fundCode);
         return ApiResponse.success(null);
+    }
+
+    /** 将当前会话数据范围限定为本人已关注基金，避免 Controller 端点之间的授权漂移。 */
+    private void requireCurrentUserFollowedFund(String fundCode) {
+        boolean followed = watchlistService.findCurrentUserFollowedFundCodes(List.of(fundCode)).contains(fundCode);
+        if (!followed) {
+            throw new WatchlistRequiredException();
+        }
     }
 }

@@ -3,6 +3,8 @@ package com.fundradar.core.fund.service;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
+import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
 
 import java.time.LocalDate;
@@ -25,4 +27,10 @@ public interface FundQueryService {
 
     /** 查询一只基金在明确日期窗口内的历史净值，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundNavHistoryResponse getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate);
+
+    /** 查询当前基金市场受控样本中的同类型比较，不表示全市场排名。 */
+    FundSameTypeComparisonResponse getFundSameTypeComparison(String fundCode);
+
+    /** 查询关注后基金份额规模历史；调用方必须已完成当前用户关注关系校验。 */
+    FundShareHistoryResponse getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate);
 }

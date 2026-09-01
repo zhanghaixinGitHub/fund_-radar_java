@@ -3,12 +3,17 @@ package com.fundradar.core.fund.service;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
+import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.integration.ai.AiFundDetail;
 import com.fundradar.core.integration.ai.AiFundDividend;
 import com.fundradar.core.integration.ai.AiFundManager;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
 import com.fundradar.core.integration.ai.AiFundNavPoint;
 import com.fundradar.core.integration.ai.AiFundPage;
+import com.fundradar.core.integration.ai.AiFundSameTypeComparison;
+import com.fundradar.core.integration.ai.AiFundSameTypeComparisonItem;
+import com.fundradar.core.integration.ai.AiFundShareHistory;
 import com.fundradar.core.integration.ai.AiFundShareSnapshot;
 import com.fundradar.core.integration.ai.AiFundSummary;
 import com.fundradar.core.integration.ai.AiFundWatchlistDetail;
@@ -123,5 +128,50 @@ class InternalFundQueryServiceTests {
         assertEquals(new BigDecimal("0.0100"), response.dividends().get(0).cashDividend());
         assertFalse(response.stale());
         assertTrue(response.withWatchStatus().basic().isWatched());
+    }
+
+    @Test
+    void mapsShareHistoryWithoutLosingSourceOrDecimalPrecision() {
+        AiFundShareHistory source = new AiFundShareHistory(
+                "002112",
+                "SYNCED",
+                List.of(new AiFundShareSnapshot(
+                        LocalDate.of(2026, 8, 25), new BigDecimal("12345.6000"), "TUSHARE_PRO_FUND"
+                ))
+        );
+
+        FundShareHistoryResponse response = InternalFundQueryService.toShareHistoryResponse(source);
+
+        assertEquals("SYNCED", response.status());
+        assertEquals(new BigDecimal("12345.6000"), response.items().get(0).fundShare());
+        assertEquals("TUSHARE_PRO_FUND", response.items().get(0).dataSource());
+    }
+
+    @Test
+    void mapsSameTypeComparisonWithoutChangingControlledScope() {
+        AiFundSameTypeComparison source = new AiFundSameTypeComparison(
+                "002112",
+                "MIXED",
+                "CURRENT_MARKET_ACTIVE_TUSHARE_PRO_FUND",
+                "SYNCED",
+                LocalDate.of(2026, 8, 25),
+                2,
+                3,
+                List.of(new AiFundSameTypeComparisonItem(
+                        1,
+                        "010710",
+                        "样本基金",
+                        "MIXED",
+                        LocalDate.of(2026, 8, 25),
+                        new BigDecimal("0.01230000"),
+                        "TUSHARE_PRO_FUND"
+                ))
+        );
+
+        FundSameTypeComparisonResponse response = InternalFundQueryService.toSameTypeComparisonResponse(source);
+
+        assertEquals("CURRENT_MARKET_ACTIVE_TUSHARE_PRO_FUND", response.scope());
+        assertEquals(2, response.targetRank());
+        assertEquals(new BigDecimal("0.01230000"), response.items().get(0).monthChangeRate());
     }
 }

@@ -7,6 +7,7 @@ import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.fund.service.FundEventQueryService;
@@ -111,6 +112,19 @@ public class FundController {
             throw new IllegalArgumentException("历史净值查询窗口过大。");
         }
         return ApiResponse.success(fundQueryService.getFundNavHistory(fundCode, startDate, endDate));
+    }
+
+    /**
+     * 查询当前基金市场范围内的同类型比较；仅展示同净值日期的一月涨跌事实，不能解读为全市场排名。
+     * 关联文档：docs_zhx/requirements/fund-detail-expansion.md、
+     * docs_zhx/design/fund-detail-expansion.md、docs_zhx/testcase/fund-detail-expansion.md。
+     */
+    @GetMapping("/{fundCode}/same-type-comparison")
+    public ApiResponse<FundSameTypeComparisonResponse> getFundSameTypeComparison(
+            @PathVariable @Size(min = 6, max = 6) String fundCode
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(fundQueryService.getFundSameTypeComparison(fundCode));
     }
 
     /** 查询指定基金的已审核可追溯关联事件，不返回资讯原文。 */

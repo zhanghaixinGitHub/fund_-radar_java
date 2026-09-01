@@ -7,6 +7,9 @@ import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
+import com.fundradar.core.fund.api.FundShareHistoryResponse;
+import com.fundradar.core.fund.api.FundShareSnapshotResponse;
 import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.watchlist.api.WatchlistItemResponse;
@@ -61,6 +64,48 @@ class WatchlistControllerTests {
             WatchlistFundDetailResponse response = controller.getCurrentUserWatchlistFundDetail("002112").data();
             assertTrue(detailRequested.get());
             assertTrue(response.basic().isWatched());
+        } finally {
+            CurrentUserContext.clear();
+        }
+    }
+
+    @Test
+    void rejectsUnfollowedFundBeforeCallingShareHistoryService() {
+        AtomicBoolean internalServiceRequested = new AtomicBoolean(false);
+        WatchlistController controller = new WatchlistController(
+                new StubWatchlistService(Set.of()),
+                new StubFundQueryService(internalServiceRequested)
+        );
+        CurrentUserContext.set(currentUser());
+
+        try {
+            assertThrows(
+                    WatchlistRequiredException.class,
+                    () -> controller.getCurrentUserFundShareHistory(
+                            "002112", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 8, 25)
+                    )
+            );
+            assertFalse(internalServiceRequested.get());
+        } finally {
+            CurrentUserContext.clear();
+        }
+    }
+
+    @Test
+    void returnsShareHistoryOnlyAfterCurrentUserFollowCheck() {
+        AtomicBoolean internalServiceRequested = new AtomicBoolean(false);
+        WatchlistController controller = new WatchlistController(
+                new StubWatchlistService(Set.of("002112")),
+                new StubFundQueryService(internalServiceRequested)
+        );
+        CurrentUserContext.set(currentUser());
+
+        try {
+            FundShareHistoryResponse response = controller.getCurrentUserFundShareHistory(
+                    "002112", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 8, 25)
+            ).data();
+            assertTrue(internalServiceRequested.get());
+            assertTrue(response.items().size() == 1);
         } finally {
             CurrentUserContext.clear();
         }
@@ -139,6 +184,22 @@ class WatchlistControllerTests {
         @Override
         public FundNavHistoryResponse getFundNavHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public FundSameTypeComparisonResponse getFundSameTypeComparison(String fundCode) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public FundShareHistoryResponse getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
+            detailRequested.set(true);
+            return new FundShareHistoryResponse(
+                    "SYNCED",
+                    java.util.List.of(new FundShareSnapshotResponse(
+                            LocalDate.of(2026, 8, 25), new java.math.BigDecimal("123.4500"), "TUSHARE_PRO_FUND"
+                    ))
+            );
         }
     }
 }
