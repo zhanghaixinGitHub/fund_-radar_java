@@ -46,6 +46,11 @@ fund:
     enabled: ${FUND_READ_CACHE_ENABLED:true}
     ttl: ${FUND_READ_CACHE_TTL:15m}
 
+analysis:
+  delivery:
+    enabled: ${ANALYSIS_DELIVERY_ENABLED:false}
+    fixed-delay: ${ANALYSIS_DELIVERY_FIXED_DELAY:PT5M}
+
 management:
   endpoints:
     web:

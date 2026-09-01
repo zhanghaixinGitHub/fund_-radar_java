@@ -42,5 +42,12 @@ class AnalysisDeliveryControlPlaneMigrationTests {
                         """)
                 .query(Integer.class)
                 .single());
+        assertEquals(2, jdbcClient.sql("""
+                        SELECT COUNT(*)
+                        FROM system_permission
+                        WHERE permission_code IN ('NOTIFICATION_SELF_READ', 'NOTIFICATION_SELF_WRITE')
+                        """)
+                .query(Integer.class)
+                .single());
     }
 }

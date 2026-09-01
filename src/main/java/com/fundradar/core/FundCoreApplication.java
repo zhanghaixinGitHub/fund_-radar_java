@@ -3,6 +3,7 @@ package com.fundradar.core;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 基金雷达 Java 核心服务的启动入口。
@@ -11,6 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
+@EnableScheduling
 public class FundCoreApplication {
 
     /** 启动 Spring Boot 应用。 */

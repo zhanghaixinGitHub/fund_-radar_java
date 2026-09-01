@@ -11,6 +11,8 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
+import java.time.Instant;
+import java.util.UUID;
 
 /**
  * M3 评分结果内部读模型客户端。
@@ -55,11 +57,55 @@ public class AiSignalClient {
         }
     }
 
+    /** 查询 ACTIVE 发布模型的已评分增量，供 Java 本地事务写入信号和通知。 */
+    public AiSignalChangePage listActiveScoredChanges(
+            Instant afterScoredAt,
+            UUID afterForecastId,
+            int pageSize
+    ) {
+        if ((afterScoredAt == null) != (afterForecastId == null)) {
+            throw new IllegalArgumentException("评分消费游标必须同时包含 scoredAt 与 forecastId。");
+        }
+        try {
+            AiSignalChangePage payload = restClient.get()
+                    .uri(uriBuilder -> buildSignalChangesUri(uriBuilder, afterScoredAt, afterForecastId, pageSize))
+                    .header("X-Service-Token", properties.getToken())
+                    .header("X-Trace-Id", TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiSignalChangePage.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty signal change page", null);
+            }
+            return payload;
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RestClientResponseException exception) {
+            throw unavailable(exception);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 构造评分结果内部接口地址，并仅在游标有效时附加 cursor 参数。 */
     private URI buildSignalsUri(UriBuilder uriBuilder, String fundCode, int pageSize, String cursor) {
         uriBuilder.path("/internal/v1/signals").queryParam("fundCode", fundCode).queryParam("pageSize", pageSize);
         if (StringUtils.hasText(cursor)) {
             uriBuilder.queryParam("cursor", cursor);
+        }
+        return uriBuilder.build();
+    }
+
+    /** 构造按复合游标查询的评分变更地址。 */
+    private URI buildSignalChangesUri(
+            UriBuilder uriBuilder,
+            Instant afterScoredAt,
+            UUID afterForecastId,
+            int pageSize
+    ) {
+        uriBuilder.path("/internal/v1/signals/changes").queryParam("pageSize", pageSize);
+        if (afterScoredAt != null) {
+            uriBuilder.queryParam("afterScoredAt", afterScoredAt);
+            uriBuilder.queryParam("afterForecastId", afterForecastId);
         }
         return uriBuilder.build();
     }
