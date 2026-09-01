@@ -86,6 +86,28 @@ public class AiSignalClient {
         }
     }
 
+    /** 查询基金类型对应的已发布模型与回测摘要；读取不会创建、运行或发布任何模型。 */
+    public AiFundAnalysisSummary getFundAnalysisSummary(String fundCode) {
+        try {
+            AiFundAnalysisSummary payload = restClient.get()
+                    .uri(uriBuilder -> buildFundAnalysisSummaryUri(uriBuilder, fundCode))
+                    .header("X-Service-Token", properties.getToken())
+                    .header("X-Trace-Id", TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiFundAnalysisSummary.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty analysis summary", null);
+            }
+            return payload;
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (RestClientResponseException exception) {
+            throw unavailable(exception);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 构造评分结果内部接口地址，并仅在游标有效时附加 cursor 参数。 */
     private URI buildSignalsUri(UriBuilder uriBuilder, String fundCode, int pageSize, String cursor) {
         uriBuilder.path("/internal/v1/signals").queryParam("fundCode", fundCode).queryParam("pageSize", pageSize);
@@ -108,6 +130,11 @@ public class AiSignalClient {
             uriBuilder.queryParam("afterForecastId", afterForecastId);
         }
         return uriBuilder.build();
+    }
+
+    /** 构造基金已发布模型摘要接口地址；基金代码始终由 Java 对外参数校验。 */
+    private URI buildFundAnalysisSummaryUri(UriBuilder uriBuilder, String fundCode) {
+        return uriBuilder.path("/internal/v1/analysis/fund-summary").queryParam("fundCode", fundCode).build();
     }
 
     /** 记录调用失败原因并转换为统一的 AI 服务不可用异常。 */

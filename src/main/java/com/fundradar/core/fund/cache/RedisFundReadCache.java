@@ -1,6 +1,7 @@
 package com.fundradar.core.fund.cache;
 
 import com.fundradar.core.fund.api.FundDetailResponse;
+import com.fundradar.core.fund.api.FundAnalysisSummaryResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
 import com.fundradar.core.fund.api.FundFeatureStatusResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
@@ -109,6 +110,16 @@ public class RedisFundReadCache {
         return find(featureStatusKey(fundCode), CachedFeatureStatus.class);
     }
 
+    /** 缓存一次成功的 M3-06 已发布模型与回测摘要。 */
+    public void saveAnalysisSummary(String fundCode, FundAnalysisSummaryResponse response) {
+        save(analysisSummaryKey(fundCode), new CachedAnalysisSummary(response, Instant.now()));
+    }
+
+    /** 读取指定基金最后一次成功的已发布模型与回测摘要缓存。 */
+    public Optional<CachedAnalysisSummary> findAnalysisSummary(String fundCode) {
+        return find(analysisSummaryKey(fundCode), CachedAnalysisSummary.class);
+    }
+
     /** 将对象序列化到 Redis；缓存故障仅记录告警，不影响主查询成功结果。 */
     private void save(String key, Object value) {
         if (!properties.isEnabled()) {
@@ -169,6 +180,11 @@ public class RedisFundReadCache {
         return KEY_PREFIX + "features:f=" + fundCode;
     }
 
+    /** 生成按基金隔离的发布模型摘要缓存键，不能与信号游标页复用。 */
+    private String analysisSummaryKey(String fundCode) {
+        return KEY_PREFIX + "analysis-summary:f=" + fundCode;
+    }
+
     /** 将 null 统一为空字符串并去除首尾空白，确保同义查询使用同一缓存键。 */
     private String normalize(String value) {
         return value == null ? "" : value.strip();
@@ -201,5 +217,9 @@ public class RedisFundReadCache {
 
     /** M3-G1 特征状态缓存值及其生成时间。 */
     public record CachedFeatureStatus(FundFeatureStatusResponse data, Instant cachedAt) {
+    }
+
+    /** 已发布模型与回测摘要缓存值及其最后成功读取时间。 */
+    public record CachedAnalysisSummary(FundAnalysisSummaryResponse data, Instant cachedAt) {
     }
 }

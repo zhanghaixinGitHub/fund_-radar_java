@@ -4,6 +4,7 @@ import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.fund.api.FundDetailResponse;
+import com.fundradar.core.fund.api.FundAnalysisSummaryResponse;
 import com.fundradar.core.fund.api.FundEventPageResponse;
 import com.fundradar.core.fund.api.FundFeatureStatusResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
@@ -12,6 +13,7 @@ import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
 import com.fundradar.core.fund.api.FundSignalPageResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
 import com.fundradar.core.fund.service.FundEventQueryService;
+import com.fundradar.core.fund.service.FundAnalysisSummaryQueryService;
 import com.fundradar.core.fund.service.FundFeatureStatusQueryService;
 import com.fundradar.core.fund.service.FundQueryService;
 import com.fundradar.core.fund.service.FundSignalQueryService;
@@ -48,6 +50,7 @@ public class FundController {
 
     private final FundQueryService fundQueryService;
     private final FundEventQueryService fundEventQueryService;
+    private final FundAnalysisSummaryQueryService fundAnalysisSummaryQueryService;
     private final FundFeatureStatusQueryService fundFeatureStatusQueryService;
     private final FundSignalQueryService fundSignalQueryService;
     private final WatchlistService watchlistService;
@@ -55,12 +58,14 @@ public class FundController {
     public FundController(
             FundQueryService fundQueryService,
             FundEventQueryService fundEventQueryService,
+            FundAnalysisSummaryQueryService fundAnalysisSummaryQueryService,
             FundFeatureStatusQueryService fundFeatureStatusQueryService,
             FundSignalQueryService fundSignalQueryService,
             WatchlistService watchlistService
     ) {
         this.fundQueryService = fundQueryService;
         this.fundEventQueryService = fundEventQueryService;
+        this.fundAnalysisSummaryQueryService = fundAnalysisSummaryQueryService;
         this.fundFeatureStatusQueryService = fundFeatureStatusQueryService;
         this.fundSignalQueryService = fundSignalQueryService;
         this.watchlistService = watchlistService;
@@ -161,6 +166,19 @@ public class FundController {
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(fundSignalQueryService.listSignals(fundCode, pageSize, cursor));
+    }
+
+    /**
+     * 查询已发布模型及关联回测摘要，不触发任何回测、评分、同步或模型状态变化。
+     * 关联文档：docs_zhx/requirements/m3-decision-assistance.md、
+     * docs_zhx/design/m3-decision-assistance.md、docs_zhx/testcase/m3-decision-assistance.md。
+     */
+    @GetMapping("/{fundCode}/analysis-summary")
+    public ApiResponse<FundAnalysisSummaryResponse> getFundAnalysisSummary(
+            @PathVariable @Size(min = 6, max = 6) String fundCode
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(fundAnalysisSummaryQueryService.getFundAnalysisSummary(fundCode));
     }
 
     /** 在共享基金读模型返回浏览器前，按当前会话批量附加本人关注标记，绝不写入 Redis 缓存。 */

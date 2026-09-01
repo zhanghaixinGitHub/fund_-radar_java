@@ -1,5 +1,6 @@
 package com.fundradar.core.analysis;
 
+import com.fundradar.core.FundCoreApplication;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -8,7 +9,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** 验证 M3 投递控制面迁移已建立结构，但不启动评分消费或通知写入。 */
-@SpringBootTest
+@SpringBootTest(classes = FundCoreApplication.class)
 class AnalysisDeliveryControlPlaneMigrationTests {
 
     @Autowired

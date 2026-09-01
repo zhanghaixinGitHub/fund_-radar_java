@@ -1,5 +1,6 @@
 package com.fundradar.core.analysis.service;
 
+import com.fundradar.core.FundCoreApplication;
 import com.fundradar.core.integration.ai.AiSignalChange;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** 验证一页评分在本地事务中完成通知去重与复合检查点推进。 */
-@SpringBootTest
+@SpringBootTest(classes = FundCoreApplication.class)
 @Transactional
 class AnalysisSignalDeliveryWriterIntegrationTests {
 
