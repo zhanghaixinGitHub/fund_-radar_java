@@ -10,7 +10,6 @@ public record FundAnalysisSummaryResponse(
         String message,
         FundModelAnalysisSummaryResponse model,
         FundBacktestSummaryResponse backtest,
-        FundAnalysisExplanationResponse explanation,
         boolean stale,
         Instant cachedAt
 ) {

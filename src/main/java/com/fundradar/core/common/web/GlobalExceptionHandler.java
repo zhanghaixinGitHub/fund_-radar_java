@@ -11,9 +11,6 @@ import com.fundradar.core.integration.ai.FundNotFoundException;
 import com.fundradar.core.integration.ai.SyncJobNotFoundException;
 import com.fundradar.core.watchlist.credit.WatchlistQuotaExceededException;
 import com.fundradar.core.notification.service.NotificationNotFoundException;
-import com.fundradar.core.analysis.service.AnalysisDeliveryInProgressException;
-import com.fundradar.core.analysis.service.AnalysisOperationConflictException;
-import com.fundradar.core.analysis.service.AnalysisRunNotFoundException;
 import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,22 +98,6 @@ public class GlobalExceptionHandler {
         LOGGER.error("GlobalExceptionHandler.handleAiServiceUnavailable   >>> AI service is unavailable", exception);
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiResponse.failure("AI_SERVICE_UNAVAILABLE", "分析服务暂时不可用，请稍后重试。"));
-    }
-
-    /** 分析状态机拒绝重复执行或不合法转换时统一返回 409。 */
-    @ExceptionHandler({AnalysisOperationConflictException.class, AnalysisDeliveryInProgressException.class})
-    public ResponseEntity<ApiResponse<Void>> handleAnalysisConflict(RuntimeException exception) {
-        LOGGER.warn("GlobalExceptionHandler.handleAnalysisConflict   >>> {}", exception.getMessage());
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ApiResponse.failure("ANALYSIS_OPERATION_CONFLICT", "当前分析操作不满足执行条件，请刷新状态后重试。"));
-    }
-
-    /** 持久分析运行不存在时返回 404，不将单条资源缺失伪装为服务不可用。 */
-    @ExceptionHandler(AnalysisRunNotFoundException.class)
-    public ResponseEntity<ApiResponse<Void>> handleAnalysisRunNotFound(AnalysisRunNotFoundException exception) {
-        LOGGER.warn("GlobalExceptionHandler.handleAnalysisRunNotFound   >>> {}", exception.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResponse.failure("ANALYSIS_RUN_NOT_FOUND", "未找到该分析运行。"));
     }
 
     /** 将重复的人工同步请求转换为 409，避免用户重复触发外部调用。 */

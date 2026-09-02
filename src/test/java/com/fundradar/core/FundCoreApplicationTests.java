@@ -61,14 +61,9 @@ class FundCoreApplicationTests {
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
     }
 
-    /** M3-05 分析控制与本人通知接口必须在进入业务逻辑前完成服务端认证。 */
+    /** 本人通知与基金分析摘要接口必须在进入业务逻辑前完成服务端认证。 */
     @Test
-    void rejectsUnauthenticatedAnalysisControlAndNotificationRequests() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/analysis/runs/rolling-backtest")
-                        .contentType("application/json")
-                        .content("{}"))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+    void rejectsUnauthenticatedNotificationAndFundAnalysisSummaryRequests() throws Exception {
         mockMvc.perform(post("/api/v1/notifications/00000000-0000-0000-0000-000000000001/read"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
