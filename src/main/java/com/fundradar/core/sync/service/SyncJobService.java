@@ -15,6 +15,9 @@ public interface SyncJobService {
     /** 创建基金市场完整资料同步任务。 */
     SyncJobResponse startMarketDetails();
 
+    /** 创建当前 2000 积分已授权免费数据补齐任务。 */
+    SyncJobResponse startMarketFreeDataCompletion();
+
     /** 创建已落库净值的特征快照手动重试任务。 */
     SyncJobResponse startStockFeatureSnapshots();
 
@@ -23,6 +26,9 @@ public interface SyncJobService {
 
     /** 查询当前 Python 进程最近一次基金市场完整资料同步任务。 */
     SyncJobResponse getLatestMarketDetails();
+
+    /** 查询当前 Python 进程最近一次免费数据补齐任务。 */
+    SyncJobResponse getLatestMarketFreeDataCompletion();
 
     /** 查询当前 Python 进程最近一次特征快照任务。 */
     SyncJobResponse getLatestStockFeatureSnapshots();

@@ -22,7 +22,11 @@ import java.util.UUID;
  *
  * <p>关联文档：docs_zhx/requirements/sync-center-tasks.md；
  * docs_zhx/design/sync-center-tasks.md；
- * docs_zhx/testcase/sync-center-tasks.md。</p>
+ * docs_zhx/testcase/sync-center-tasks.md；
+ * C:/WebStormProject/workSpace05/docs_zhx/requirements/tushare-2000-data-completion.md；
+ * C:/WebStormProject/workSpace05/docs_zhx/design/free-data-prediction-v1.md；
+ * C:/WebStormProject/workSpace05/docs_zhx/implementation/tushare-2000-data-completion.md；
+ * C:/WebStormProject/workSpace05/docs_zhx/testcase/tushare-2000-data-completion.md。</p>
  */
 @RestController
 @RequestMapping("/api/v1/sync-jobs")
@@ -50,6 +54,16 @@ public class SyncJobController {
                 .body(ApiResponse.success(syncJobService.startMarketDetails()));
     }
 
+    /**
+     * 创建当前 2000 积分已验权的免费数据补齐任务；仅管理员可显式发起，详情页不会调用本接口。
+     */
+    @PostMapping("/market-free-data-completion")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startMarketFreeDataCompletion() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startMarketFreeDataCompletion()));
+    }
+
     /** 创建特征快照同步任务；该任务只读取已落库净值，不发起外部市场调用。 */
     @PostMapping("/stock-feature-snapshots")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startStockFeatureSnapshots() {
@@ -72,6 +86,13 @@ public class SyncJobController {
         return ApiResponse.success(syncJobService.getLatestMarketDetails());
     }
 
+    /** 查询当前 Python 进程最近一次免费数据补齐任务；无任务时 data 为 null。 */
+    @GetMapping("/market-free-data-completion/latest")
+    public ApiResponse<SyncJobResponse> getLatestMarketFreeDataCompletion() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestMarketFreeDataCompletion());
+    }
+
     /** 查询当前 Python 进程最近一次特征快照任务；无任务时 data 为 null。 */
     @GetMapping("/stock-feature-snapshots/latest")
     public ApiResponse<SyncJobResponse> getLatestStockFeatureSnapshots() {
@@ -79,7 +100,7 @@ public class SyncJobController {
         return ApiResponse.success(syncJobService.getLatestStockFeatureSnapshots());
     }
 
-    /** 查询两类任务最近一次完整成功的持久化时间。 */
+    /** 查询各类任务最近一次完整成功的持久化时间。 */
     @GetMapping("/last-success")
     public ApiResponse<List<SyncJobLastSuccessResponse>> getLastSuccessfulSyncTimes() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);

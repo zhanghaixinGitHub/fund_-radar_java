@@ -45,6 +45,16 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startMarketFreeDataCompletion() {
+        SyncJobResponse response = toResponse(aiSyncJobClient.startMarketFreeDataCompletion());
+        LOGGER.info(
+                "InternalSyncJobService.startMarketFreeDataCompletion   >>> sync job started, jobId={}, status={}",
+                response.jobId(), response.status()
+        );
+        return response;
+    }
+
+    @Override
     public SyncJobResponse startStockFeatureSnapshots() {
         SyncJobResponse response = toResponse(aiSyncJobClient.startStockFeatureSnapshots());
         LOGGER.info(
@@ -63,6 +73,12 @@ public class InternalSyncJobService implements SyncJobService {
     @Override
     public SyncJobResponse getLatestMarketDetails() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestMarketDetails();
+        return source == null ? null : toResponse(source);
+    }
+
+    @Override
+    public SyncJobResponse getLatestMarketFreeDataCompletion() {
+        AiSyncJobStatus source = aiSyncJobClient.getLatestMarketFreeDataCompletion();
         return source == null ? null : toResponse(source);
     }
 

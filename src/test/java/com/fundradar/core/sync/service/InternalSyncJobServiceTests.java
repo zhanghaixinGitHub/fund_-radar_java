@@ -111,4 +111,35 @@ class InternalSyncJobServiceTests {
         assertEquals(source.syncRunId(), response.syncRunId());
         assertEquals("FEATURE_SNAPSHOT_BUILD_FAILED", response.errorCode());
     }
+
+    @Test
+    void mapsFreeDataCompletionParentRunWithoutInventingDatasetDetails() {
+        AiSyncJobStatus source = new AiSyncJobStatus(
+                UUID.fromString("00000000-0000-0000-0000-000000000404"),
+                "MARKET_FREE_DATA_COMPLETION",
+                "SUCCEEDED",
+                LocalDate.of(2026, 9, 2),
+                List.of(),
+                2,
+                2,
+                null,
+                "当前 2000 积分已授权数据补齐完成",
+                UUID.fromString("00000000-0000-0000-0000-000000000306"),
+                10,
+                7,
+                2,
+                1,
+                null,
+                null,
+                Instant.parse("2026-09-02T12:00:00Z"),
+                Instant.parse("2026-09-02T12:01:00Z")
+        );
+
+        SyncJobResponse response = InternalSyncJobService.toResponse(source);
+
+        assertEquals("MARKET_FREE_DATA_COMPLETION", response.jobType());
+        assertEquals("SUCCEEDED", response.status());
+        assertEquals(source.syncRunId(), response.syncRunId());
+        assertEquals(10, response.fetchedCount());
+    }
 }
