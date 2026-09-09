@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Python现金研究状态的最小投影，不接收模型系数、完整样本或历史答案。
- * 概率/方向目前必须为空；研究协议不能被错误地当成已发布模型。
+ * Python现金研究/正式结果的最小投影，不接收模型系数、完整样本或历史答案。
+ * 只有完整且通过校验的AVAILABLE结果可带数字，研究状态仍必须为空。
  */
 public record AiWatchlistPrediction(
         @JsonProperty("fund_code") String fundCode,
@@ -24,5 +24,11 @@ public record AiWatchlistPrediction(
         @JsonProperty("reason_codes") List<String> reasonCodes,
         List<String> reasons,
         String message,
-        String disclaimer
+        String disclaimer,
+        @JsonProperty("forecast_id") UUID forecastId,
+        @JsonProperty("cutoff_date") LocalDate cutoffDate,
+        @JsonProperty("target_base_date") LocalDate targetBaseDate,
+        @JsonProperty("target_end_date") LocalDate targetEndDate,
+        @JsonProperty("generated_at") Instant generatedAt,
+        @JsonProperty("model_hash") String modelHash
 ) { }

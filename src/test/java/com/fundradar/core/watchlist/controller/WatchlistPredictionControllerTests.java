@@ -132,4 +132,59 @@ class WatchlistPredictionControllerTests {
         assertFalse(actual.message().contains("synthetic-secret"));
         assertNull(actual.upProbability());
     }
+
+    private String availableBody() {
+        // 仅用于本测试TCP服务的人工响应；不是任何真实模型的发布证明。
+        return """
+                {"fund_code":"008888","status":"AVAILABLE","horizon_trading_days":20,
+                 "up_probability":0.68,"direction":"UP","latest_nav_date":"2026-09-07",
+                 "research_run_id":"f70feb1a-129d-4482-b66d-f4e2e3a5425c",
+                 "model_version":"CASH_FORECAST_STORAGE_V1","reason_codes":[],"reasons":[],
+                 "message":"有效结果。","disclaimer":"概率不是收益率。",
+                 "forecast_id":"ff8f2cbd-696b-42f8-91db-4937bf571574","cutoff_date":"2026-09-08",
+                 "target_base_date":"2026-09-08","target_end_date":"2026-10-14",
+                 "generated_at":"2026-09-09T02:00:00Z",
+                 "model_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                """;
+    }
+
+    @Test void validStoredCashResultRetainsProbabilityIdentityAndOriginalDates() throws Exception {
+        var value = exchange(availableBody(), 200, new AtomicReference<>());
+        assertEquals("AVAILABLE", value.status());
+        assertEquals(new java.math.BigDecimal("0.68"), value.upProbability());
+        assertEquals("2026-09-08", value.cutoffDate().toString());
+        assertEquals("2026-10-14", value.targetEndDate().toString());
+        assertNotNull(value.forecastId());
+        assertTrue(value.reasonCodes().isEmpty());
+    }
+
+    @Test void damagedOrNonAvailablePayloadNeverLeaksProbability() throws Exception {
+        for (String payload : List.of(
+                availableBody().replace("AVAILABLE", "STALE"),
+                availableBody().replace("AVAILABLE", "MODEL_NOT_RELEASED"),
+                availableBody().replace("0.68", "1.01"),
+                availableBody().replace("0.68", "-0.1"),
+                availableBody().replace("\"UP\"", "\"NON_UP\""),
+                availableBody().replace("CASH_FORECAST_STORAGE_V1", "CASH_RESEARCH_PROTOCOL_V1"),
+                availableBody().replace("2026-10-14", "2026-09-08"),
+                availableBody().replace("\"cutoff_date\":\"2026-09-08\"", "\"cutoff_date\":null"),
+                availableBody().replace("\"forecast_id\":\"ff8f2cbd-696b-42f8-91db-4937bf571574\"", "\"forecast_id\":null"))) {
+            var value = exchange(payload, 200, new AtomicReference<>());
+            assertEquals("UNAVAILABLE", value.status());
+            assertNull(value.upProbability());
+            assertNull(value.forecastId());
+        }
+    }
+
+    @Test void staleStateKeepsOriginalDatesButNoNumbers() throws Exception {
+        String payload = availableBody().replace("AVAILABLE", "STALE")
+                .replace("\"up_probability\":0.68", "\"up_probability\":null")
+                .replace("\"direction\":\"UP\"", "\"direction\":null")
+                .replace("\"reason_codes\":[]", "\"reason_codes\":[\"FORECAST_WINDOW_ENDED\"]")
+                .replace("\"reasons\":[]", "\"reasons\":[\"原预测区间已结束。\"]");
+        var value = exchange(payload, 200, new AtomicReference<>());
+        assertEquals("STALE", value.status());
+        assertNull(value.upProbability());
+        assertEquals("2026-10-14", value.targetEndDate().toString());
+    }
 }
