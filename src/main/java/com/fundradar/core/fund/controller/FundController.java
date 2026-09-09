@@ -74,6 +74,16 @@ public class FundController {
     /**
      * 按关键字查询基金列表；支持旧游标或页码模式，关联文档见
      * docs_zhx/requirements/fund-radar.md、docs_zhx/design/fund-radar.md、docs_zhx/testcase/fund-radar.md。
+     *
+     * @param keyword 基金代码或名称的搜索关键字，可选，最多 50 个字符；不传或只含空白时不按关键字筛选。
+     * @param pageSize 每页返回的最大条数，默认 10，允许范围为 1～100。
+     * @param cursor 兼容旧分页方式的游标，可选；查询下一页时传入上一页响应中的 nextCursor。
+     *               不传或只含空白时视为未使用游标，非空白游标不能与 page 同时使用。
+     * @param page 目标页码，可选，从 1 开始，允许范围为 1～10000；当前前端使用此参数翻页或跳页，
+     *             不能与非空白 cursor 同时使用。
+     * @param fundType 基金类型筛选条件，可选，不传时不按类型筛选；传入时只允许以下大写值：
+     *                 BOND（债券型）、STOCK（股票型）、MIXED（混合型）、INDEX（指数型）、
+     *                 MONEY（货币型）、QDII、FOF（基金中基金）、OTHER（其他类型）；空字符串不合法。
      */
     @GetMapping
     public ApiResponse<FundPageResponse> listFunds(
