@@ -2,6 +2,7 @@ package com.fundradar.core.integration.ai;
 
 import com.fundradar.core.common.trace.TraceContext;
 import com.fundradar.core.watchlist.api.WatchlistPredictionResponse;
+import com.fundradar.core.watchlist.api.DirectionExperimentResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -43,6 +44,27 @@ public class AiPredictionClient {
                     traceId, fundCode, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
             LOGGER.debug("AiPredictionClient.read   >>>   failure frames={}", java.util.Arrays.toString(error.getStackTrace()));
             return WatchlistPredictionResponse.unavailable(fundCode);
+        }
+    }
+
+    /** 独立读取当前实验分数，不通过正式概率投影或发布流程。 */
+    public DirectionExperimentResponse readExperiment(String fundCode) {
+        long started = System.nanoTime();
+        String traceId = TraceContext.getTraceId();
+        try {
+            var payload = client.get().uri("/internal/v1/predictions/{fundCode}/experiment", fundCode)
+                    .header("X-Service-Token", properties.getToken()).header("X-Trace-Id", traceId)
+                    .retrieve().body(AiDirectionExperiment.class);
+            var result = DirectionExperimentResponse.from(payload, fundCode);
+            LOGGER.info("AiPredictionClient.readExperiment   >>>   traceId={}, fundCode={}, status={}, elapsedMs={}",
+                    traceId, fundCode, result.status(), (System.nanoTime() - started) / 1_000_000);
+            return result;
+        } catch (RuntimeException error) {
+            LOGGER.warn("AiPredictionClient.readExperiment   >>>   traceId={}, fundCode={}, errorType={}, elapsedMs={}",
+                    traceId, fundCode, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
+            LOGGER.debug("AiPredictionClient.readExperiment   >>>   failure frames={}",
+                    java.util.Arrays.toString(error.getStackTrace()));
+            return DirectionExperimentResponse.unavailable(fundCode);
         }
     }
 }

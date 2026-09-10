@@ -5,6 +5,7 @@ import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.common.api.ApiResponse;
 import com.fundradar.core.integration.ai.AiPredictionClient;
 import com.fundradar.core.watchlist.api.WatchlistPredictionResponse;
+import com.fundradar.core.watchlist.api.DirectionExperimentResponse;
 import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import com.fundradar.core.watchlist.service.WatchlistService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -46,5 +47,19 @@ public class WatchlistPredictionController {
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiResponse<Void>> invalidFundCode(ConstraintViolationException ignored) {
         return ResponseEntity.badRequest().body(ApiResponse.failure("INVALID_ARGUMENT", "基金代码必须为6位数字。"));
+    }
+
+    /** 实验入口同样先校验权限和本人关注；不接受用户编号或任意模型路径。 */
+    @GetMapping("/{fundCode}/prediction/experiment")
+    public ApiResponse<DirectionExperimentResponse> readExperiment(
+            @PathVariable @Pattern(regexp = "^\\d{6}$", message = "基金代码必须为6位数字。") String fundCode,
+            HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store, private");
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
+        if (!watchlist.findCurrentUserFollowedFundCodes(List.of(fundCode)).contains(fundCode)) {
+            throw new WatchlistRequiredException();
+        }
+        return ApiResponse.success(prediction.readExperiment(fundCode));
     }
 }
