@@ -17,6 +17,7 @@ import com.fundradar.core.watchlist.api.WatchlistPageResponse;
 import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import com.fundradar.core.watchlist.service.WatchlistService;
 import org.junit.jupiter.api.Test;
+import jakarta.validation.Validation;
 
 import java.time.LocalDate;
 import java.util.Collection;
@@ -27,9 +28,36 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
 
 /** 验证完整关注详情必须先通过当前用户的本地关注关系校验。 */
 class WatchlistControllerTests {
+
+    @Test
+    void forwardsSearchOnlyAfterCurrentUserPermissionCheck() {
+        var service = mock(WatchlistService.class);
+        var controller = new WatchlistController(service, mock(FundQueryService.class));
+        assertThrows(RuntimeException.class, () -> controller.listWatchlist("指数", null, 1, 10));
+        verifyNoInteractions(service);
+        CurrentUserContext.set(currentUser());
+        try {
+            controller.listWatchlist("指数", "INDEX", 2, 10);
+            verify(service).listCurrentUserItems("指数", "INDEX", 2, 10);
+        } finally {
+            CurrentUserContext.clear();
+        }
+    }
+
+    @Test
+    void searchKeywordHasSameLengthLimitAsMarket() throws Exception {
+        var controller = new WatchlistController(mock(WatchlistService.class), mock(FundQueryService.class));
+        var method = WatchlistController.class.getMethod("listWatchlist", String.class, String.class, int.class, int.class);
+        try (var factory = Validation.buildDefaultValidatorFactory()) {
+            var validator = factory.getValidator().forExecutables();
+            assertTrue(validator.validateParameters(controller, method, new Object[]{"基".repeat(50), null, 1, 10}).isEmpty());
+            assertFalse(validator.validateParameters(controller, method, new Object[]{"基".repeat(51), null, 1, 10}).isEmpty());
+        }
+    }
 
     @Test
     void rejectsUnfollowedFundBeforeCallingInternalDetailService() {
@@ -130,7 +158,7 @@ class WatchlistControllerTests {
         }
 
         @Override
-        public WatchlistPageResponse listCurrentUserItems(String fundType, int page, int pageSize) {
+        public WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize) {
             throw new UnsupportedOperationException();
         }
 

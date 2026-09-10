@@ -13,6 +13,7 @@ import com.fundradar.core.watchlist.service.WatchlistService;
 import com.fundradar.core.watchlist.service.WatchlistRequiredException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,9 +48,10 @@ public class WatchlistController {
         this.fundQueryService = fundQueryService;
     }
 
-    /** 查询当前登录用户的关注基金分页；默认每页 10 条，类型筛选由服务端执行。 */
+    /** 查询当前登录用户的关注基金分页；代码或名称关键词最多 50 字符，默认每页 10 条。 */
     @GetMapping
     public ApiResponse<WatchlistPageResponse> listWatchlist(
+            @RequestParam(required = false) @Size(max = 50) String keyword,
             @org.springframework.web.bind.annotation.RequestParam(required = false)
             @jakarta.validation.constraints.Pattern(
                     regexp = "^(BOND|STOCK|MIXED|INDEX|MONEY|QDII|FOF|OTHER)$",
@@ -61,7 +63,7 @@ public class WatchlistController {
             @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(50) int pageSize
     ) {
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
-        return ApiResponse.success(watchlistService.listCurrentUserItems(fundType, page, pageSize));
+        return ApiResponse.success(watchlistService.listCurrentUserItems(keyword, fundType, page, pageSize));
     }
 
     /**

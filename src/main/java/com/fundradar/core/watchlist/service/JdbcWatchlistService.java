@@ -18,8 +18,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -34,6 +36,7 @@ public class JdbcWatchlistService implements WatchlistService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JdbcWatchlistService.class);
     private static final int TYPE_BACKFILL_BATCH_SIZE = 50;
+    private static final int SEARCH_BATCH_SIZE = 50;
     private final JdbcClient jdbcClient;
     private final AiFundClient aiFundClient;
     private final WatchlistCreditService watchlistCreditService;
@@ -50,9 +53,13 @@ public class JdbcWatchlistService implements WatchlistService {
 
     @Override
     /** 查询当前认证用户的关注页；历史未分类记录先批量补齐类型快照再分页。 */
-    public WatchlistPageResponse listCurrentUserItems(String fundType, int page, int pageSize) {
+    public WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize) {
         AuthenticatedUser user = CurrentUserContext.require();
         refreshMissingFundTypes(user);
+        String normalizedKeyword = keyword == null ? "" : keyword.strip().toLowerCase(Locale.ROOT);
+        if (!normalizedKeyword.isEmpty()) {
+            return searchCurrentUserItems(user, normalizedKeyword, fundType, page, pageSize);
+        }
         long totalCount = countCurrentUserItems(user, fundType);
         List<StoredWatchlistItem> records = findCurrentUserPage(user, fundType, page, pageSize);
         Map<String, AiFundSummary> summaries = new HashMap<>();
@@ -78,6 +85,48 @@ public class JdbcWatchlistService implements WatchlistService {
         int totalPages = (int) ((totalCount + pageSize - 1) / pageSize);
         return new WatchlistPageResponse(
                 items, page, pageSize, totalCount, totalPages, marketDataUnavailable, watchlistCreditService.getQuota(user)
+        );
+    }
+
+    /**
+     * 名称来自已有批量行情接口。只扫描本人关注，按原排序分批匹配后计数、截取目标页，
+     * 避免只搜索当前页，也避免逐只请求或把全部摘要留在内存中。
+     * 行情调用失败时沿用 503 错误，不能把未完成的名称搜索伪装成完整结果。
+     */
+    private WatchlistPageResponse searchCurrentUserItems(
+            AuthenticatedUser user, String keyword, String fundType, int page, int pageSize
+    ) {
+        long recordCount = countCurrentUserItems(user, fundType);
+        long offset = (long) (page - 1) * pageSize;
+        long matchedCount = 0;
+        List<WatchlistFundItemResponse> items = new ArrayList<>();
+        for (int batchPage = 1; (long) (batchPage - 1) * SEARCH_BATCH_SIZE < recordCount; batchPage++) {
+            List<StoredWatchlistItem> records = findCurrentUserPage(user, fundType, batchPage, SEARCH_BATCH_SIZE);
+            if (records.isEmpty()) {
+                break;
+            }
+            Map<String, AiFundSummary> summaries = new HashMap<>();
+            for (AiFundSummary summary : aiFundClient.listFundSummariesByCodes(
+                    records.stream().map(StoredWatchlistItem::fundCode).toList()
+            )) {
+                summaries.put(summary.fundCode(), summary);
+            }
+            for (StoredWatchlistItem record : records) {
+                AiFundSummary summary = summaries.get(record.fundCode());
+                boolean matches = record.fundCode().contains(keyword)
+                        || (summary != null && summary.fundName() != null
+                        && summary.fundName().toLowerCase(Locale.ROOT).contains(keyword));
+                if (matches) {
+                    if (matchedCount >= offset && items.size() < pageSize) {
+                        items.add(toPageItem(record, summary));
+                    }
+                    matchedCount++;
+                }
+            }
+        }
+        return new WatchlistPageResponse(
+                items, page, pageSize, matchedCount, (int) ((matchedCount + pageSize - 1) / pageSize),
+                false, watchlistCreditService.getQuota(user)
         );
     }
 

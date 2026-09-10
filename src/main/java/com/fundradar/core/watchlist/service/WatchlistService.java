@@ -14,8 +14,8 @@ import java.util.Set;
  */
 public interface WatchlistService {
 
-    /** 查询当前用户已关注的基金，按类型连续分组并以页码返回。 */
-    WatchlistPageResponse listCurrentUserItems(String fundType, int page, int pageSize);
+    /** 在本人关注中按代码或名称关键词、类型筛选，按类型连续分组并以页码返回。 */
+    WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize);
 
     /** 从当前认证用户范围内批量判断哪些基金已关注，供基金市场和详情页追加展示状态。 */
     Set<String> findCurrentUserFollowedFundCodes(Collection<String> fundCodes);
