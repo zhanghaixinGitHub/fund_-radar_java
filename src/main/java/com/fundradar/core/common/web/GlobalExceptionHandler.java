@@ -28,6 +28,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(com.fundradar.core.simulation.SimulationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleSimulation(com.fundradar.core.simulation.SimulationException error) {
+        HttpStatus status=switch(error.code()) {
+            case "SIM_NOT_FOUND" -> HttpStatus.NOT_FOUND;
+            case "SIM_MARKET_UNAVAILABLE" -> HttpStatus.SERVICE_UNAVAILABLE;
+            default -> HttpStatus.CONFLICT;
+        };
+        return ResponseEntity.status(status).body(ApiResponse.failure(error.code(), error.getMessage()));
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /** 将请求体校验失败转换为 400，返回第一条字段校验提示。 */
