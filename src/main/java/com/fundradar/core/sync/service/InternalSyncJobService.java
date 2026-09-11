@@ -25,6 +25,20 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startAll() {
+        SyncJobResponse response = toResponse(aiSyncJobClient.startAll());
+        LOGGER.info("InternalSyncJobService.startAll   >>> sync batch started, jobId={}, status={}",
+                response.jobId(), response.status());
+        return response;
+    }
+
+    @Override
+    public SyncJobResponse getLatestAll() {
+        AiSyncJobStatus source = aiSyncJobClient.getLatestAll();
+        return source == null ? null : toResponse(source);
+    }
+
+    @Override
     public SyncJobResponse startMarketNavIncremental() {
         SyncJobResponse response = toResponse(aiSyncJobClient.startMarketNavIncremental());
         LOGGER.info(

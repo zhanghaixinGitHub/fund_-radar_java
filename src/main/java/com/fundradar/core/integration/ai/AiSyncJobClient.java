@@ -34,6 +34,45 @@ public class AiSyncJobClient {
                 .build();
     }
 
+    /** 创建后台串行批次；不重试 POST，避免网络超时时重复触发外部同步。 */
+    public AiSyncJobStatus startAll() {
+        try {
+            AiSyncJobStatus payload = restClient.post()
+                    .uri("/internal/v1/funds/sync-jobs/all")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiSyncJobStatus.class);
+            if (payload == null) {
+                throw new AiServiceUnavailableException("AI service returned an empty sync batch", null);
+            }
+            return payload;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 409) {
+                throw new MarketNavSyncInProgressException("a sync job is already running", exception);
+            }
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    /** 查询当前进程最近批次，首次使用或 Python 重启后可为空。 */
+    public AiSyncJobStatus getLatestAll() {
+        try {
+            return restClient.get()
+                    .uri("/internal/v1/funds/sync-jobs/all/latest")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .retrieve()
+                    .body(AiSyncJobStatus.class);
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
+
     /** 创建基金市场日净值增量同步任务，立即返回任务标识和初始状态。 */
     public AiSyncJobStatus startMarketNavIncremental() {
         try {

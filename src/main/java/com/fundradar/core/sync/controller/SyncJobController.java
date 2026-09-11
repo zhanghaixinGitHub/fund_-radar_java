@@ -38,6 +38,21 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
+    /** 一键创建四类同步的后台串行批次，与单项任务共用启动权限。 */
+    @PostMapping("/all")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startAll()));
+    }
+
+    /** 查询当前 Python 进程最近一键同步批次，刷新页面不重复发起任务。 */
+    @GetMapping("/all/latest")
+    public ApiResponse<SyncJobResponse> getLatestAll() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestAll());
+    }
+
     /** 创建基金市场日净值增量任务，立即返回任务标识；实际执行在 Python 后台进行。 */
     @PostMapping("/market-nav-incremental")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startMarketNavIncremental() {
