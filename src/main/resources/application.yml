@@ -51,6 +51,13 @@ analysis:
     enabled: ${ANALYSIS_DELIVERY_ENABLED:false}
     fixed-delay: ${ANALYSIS_DELIVERY_FIXED_DELAY:PT5M}
 
+portfolio:
+  advice:
+    # 每日08:30起检查；独立线程避免影响每分钟模拟结算，停止服务期间不补造历史。
+    enabled: ${PORTFOLIO_ADVICE_ENABLED:true}
+    fixed-delay: ${PORTFOLIO_ADVICE_FIXED_DELAY:PT30M}
+    initial-delay: ${PORTFOLIO_ADVICE_INITIAL_DELAY:PT20S}
+
 management:
   endpoints:
     web:
