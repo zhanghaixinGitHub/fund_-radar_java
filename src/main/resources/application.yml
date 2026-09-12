@@ -67,6 +67,15 @@ management:
     health:
       show-details: never
 
+# 一交易日实验与20日及持仓建议独立；仅在本地验收后通过现有环境配置开启。
+direction1d:
+  enabled: ${DIRECTION1D_ENABLED:false}
+  forecast-enabled: ${DIRECTION1D_FORECAST_ENABLED:true}
+  review-enabled: ${DIRECTION1D_REVIEW_ENABLED:true}
+  training-enabled: ${DIRECTION1D_TRAINING_ENABLED:true}
+  fixed-delay: ${DIRECTION1D_FIXED_DELAY:PT30M}
+  initial-delay: ${DIRECTION1D_INITIAL_DELAY:PT10S}
+
 logging:
   level:
     com.fundradar.core: INFO
