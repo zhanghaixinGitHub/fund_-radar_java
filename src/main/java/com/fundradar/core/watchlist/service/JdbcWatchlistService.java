@@ -254,7 +254,8 @@ public class JdbcWatchlistService implements WatchlistService {
     private List<StoredWatchlistItem> findCurrentUserPage(
             AuthenticatedUser user, String fundType, int page, int pageSize
     ) {
-        String typeCondition = fundType == null ? "" : " AND fund_type = :fundType";
+        // 筛选条件末尾保留换行，防止与后续 ORDER BY 粘连成不存在的命名参数 fundTypeORDER。
+        String typeCondition = fundType == null ? "" : " AND fund_type = :fundType\n";
         var statement = jdbcClient.sql("""
                         SELECT fund_code, fund_type, created_at
                         FROM watchlist_item

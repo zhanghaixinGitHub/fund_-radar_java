@@ -12,7 +12,10 @@ import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterUtils;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.sql.ResultSet;
@@ -41,6 +44,7 @@ class JdbcWatchlistSearchTests {
     private final List<List<String>> batches = new ArrayList<>();
     private final List<String> codes = IntStream.rangeClosed(1, 52).mapToObj(i -> "%06d".formatted(i)).toList();
     private JdbcWatchlistService service;
+    private String currentSql;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -51,6 +55,7 @@ class JdbcWatchlistSearchTests {
         when(jdbc.sql(anyString())).thenAnswer(call -> {
             // 所有关注 SQL 都必须携带本人条件，分页和计数使用同一条件。
             assertTrue(call.getArgument(0, String.class).contains("user_id = :userId"));
+            currentSql = call.getArgument(0, String.class);
             parameters.clear();
             return statement;
         });
@@ -65,6 +70,8 @@ class JdbcWatchlistSearchTests {
         when(count.single()).thenAnswer(call -> (long) scopedCodes().size());
         when(statement.query(Long.class)).thenReturn(count);
         when(statement.query(any(RowMapper.class))).thenAnswer(call -> {
+            // 通过 Spring 的实际命名参数解析器校验拼接结果，避免替身漏掉 fundType 与 ORDER BY 粘连。
+            NamedParameterUtils.buildValueArray(currentSql, parameters);
             RowMapper<?> mapper = call.getArgument(0);
             List<String> scoped = scopedCodes();
             int offset = ((Number) parameters.get("offset")).intValue();
@@ -144,6 +151,21 @@ class JdbcWatchlistSearchTests {
         assertEquals(52, result.totalCount());
         assertEquals("000011", result.items().get(0).fundCode());
         assertEquals(List.of(10), batches.stream().map(List::size).toList());
+    }
+
+    /** 左侧类型筛选必须能绑定 SQL 参数；没有该类型关注时返回正常空列表及完整额度。 */
+    @ParameterizedTest
+    @ValueSource(strings = {"MONEY", "BOND", "MIXED", "STOCK", "INDEX", "QDII", "FOF", "OTHER"})
+    void typeFilterBindsSqlParametersAndReturnsMatchingPage(String fundType) {
+        var result = service.listCurrentUserItems(null, fundType, 1, 10);
+        boolean hasMatches = "INDEX".equals(fundType);
+        assertEquals(hasMatches ? 52 : 0, result.totalCount());
+        assertEquals(hasMatches ? 6 : 0, result.totalPages());
+        assertEquals(hasMatches ? 10 : 0, result.items().size());
+        assertEquals(52, result.quota().activeWatchlistCount());
+        if (!hasMatches) {
+            verifyNoInteractions(ai);
+        }
     }
 
     @Test
