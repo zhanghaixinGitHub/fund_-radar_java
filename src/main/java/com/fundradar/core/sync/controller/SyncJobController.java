@@ -38,7 +38,7 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 一键创建四类同步的后台串行批次，与单项任务共用启动权限。 */
+    /** 一键创建SPX及原四类同步的后台串行批次，与单项任务共用启动权限。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);

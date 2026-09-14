@@ -9,7 +9,7 @@ import java.util.UUID;
 /** 同步中心的对外业务契约，便于后续登记更多独立同步任务。 */
 public interface SyncJobService {
 
-    /** 创建覆盖同步中心四类任务的后台串行批次。 */
+    /** 创建覆盖SPX及原四类同步任务的后台串行批次。 */
     SyncJobResponse startAll();
 
     /** 查询当前 Python 进程最近一键同步批次。 */

@@ -41,8 +41,8 @@ class SyncAllTests {
     private String upstreamBody = """
             {"job_id":"00000000-0000-0000-0000-000000000501","job_type":"MARKET_ALL",
              "status":"PARTIAL_SUCCESS","requested_nav_date":"2026-09-10","fund_codes":[],
-             "progress_current":4,"progress_total":4,"current_fund_code":null,
-             "progress_message":"成功 3 项，未完成 1 项","sync_run_id":null,
+             "progress_current":5,"progress_total":5,"current_fund_code":null,
+             "progress_message":"成功 4 项，未完成 1 项","sync_run_id":null,
              "fetched_count":0,"created_count":0,"updated_count":0,"skipped_count":0,
              "error_code":"SYNC_ALL_INCOMPLETE","error_message":"未完成：免费数据补齐",
              "started_at":"2026-09-10T01:00:00Z","finished_at":"2026-09-10T01:30:00Z"}
@@ -98,7 +98,8 @@ class SyncAllTests {
         String response = mvc.perform(post("/api/v1/sync-jobs/all"))
                 .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.jobType").value("MARKET_ALL"))
                 .andExpect(jsonPath("$.data.status").value("PARTIAL_SUCCESS"))
-                .andExpect(jsonPath("$.data.progressCurrent").value(4))
+                .andExpect(jsonPath("$.data.progressCurrent").value(5))
+                .andExpect(jsonPath("$.data.progressTotal").value(5))
                 .andExpect(jsonPath("$.data.errorCode").value("SYNC_ALL_INCOMPLETE"))
                 .andReturn().getResponse().getContentAsString();
         assertFalse(response.contains("sync-test-only-token"));
