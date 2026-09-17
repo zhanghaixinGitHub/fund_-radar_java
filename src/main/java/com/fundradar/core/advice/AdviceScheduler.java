@@ -26,13 +26,17 @@ public class AdviceScheduler {
     private final AdviceOutcomeClient outcomes;
     private final DiagnosisClient diagnoses;
     private final DiagnosisService diagnosisService;
+    private final DraftStatsClient draftStats;
+    private final RuleService ruleService;
     private final Clock clock;
     public AdviceScheduler(DataSource dataSource,SimulationRepository positions,SimulationMarketClient market,
                            AiPredictionClient predictions,AdviceService service,AdviceRepository repo,AdviceOutcomeClient outcomes,
-                           DiagnosisClient diagnoses,DiagnosisService diagnosisService,Clock clock) {
+                           DiagnosisClient diagnoses,DiagnosisService diagnosisService,
+                           DraftStatsClient draftStats,RuleService ruleService,Clock clock) {
         this.dataSource=dataSource; this.positions=positions; this.market=market; this.predictions=predictions;
         this.service=service; this.repo=repo; this.outcomes=outcomes;
-        this.diagnoses=diagnoses; this.diagnosisService=diagnosisService; this.clock=clock;
+        this.diagnoses=diagnoses; this.diagnosisService=diagnosisService;
+        this.draftStats=draftStats; this.ruleService=ruleService; this.clock=clock;
     }
     @Scheduled(scheduler="adviceTaskScheduler",fixedDelayString="${portfolio.advice.fixed-delay:PT30M}",initialDelayString="${portfolio.advice.initial-delay:PT20S}")
     public void tick() {
@@ -55,6 +59,7 @@ public class AdviceScheduler {
         try { calendar=new SimulationCalendar(market.calendar()); } catch(SimulationException ignored) { /* 各日报仍保存不可用原因。 */ }
         Map<String,DirectionExperimentResponse> cache=new HashMap<>();
         Map<String,DiagnosisTypes.Facts> factCache=new HashMap<>();
+        Map<String,RuleTypes.DraftStats> draftCache=new HashMap<>();
         var today=clock.instant().atZone(SimulationCalendar.ZONE).toLocalDate();
         UUID after=null; int saved=0,failed=0;
         while(true) {
@@ -69,6 +74,11 @@ public class AdviceScheduler {
                             var facts=factCache.computeIfAbsent(position.fundCode(),code->readFacts(code,today));
                             diagnosisService.archive(user,position,FAILED_FACTS.equals(facts) ? null : facts,clock.instant());
                         } catch(Exception error) { failed++; LOGGER.error("AdviceScheduler.run   >>>   fundCode={}, diagnosis failed",position.fundCode(),error); }
+                        try {
+                            // 草案统计同样按基金复用；失败或不适用时保留旧草案与已确认规则不变。
+                            var stats=draftCache.computeIfAbsent(position.fundCode(),code->readDraftStats(code));
+                            if(!FAILED_STATS.equals(stats)) ruleService.refreshDraft(user,position.fundCode(),stats,clock.instant());
+                        } catch(Exception error) { failed++; LOGGER.error("AdviceScheduler.run   >>>   fundCode={}, draft refresh failed",position.fundCode(),error); }
                     }
                     try {
                         if(cache.size()>256) cache.clear();
@@ -95,5 +105,10 @@ public class AdviceScheduler {
     private DiagnosisTypes.Facts readFacts(String code,java.time.LocalDate today) {
         try { return diagnoses.read(code,today); }
         catch(RuntimeException error) { return FAILED_FACTS; }
+    }
+    private static final RuleTypes.DraftStats FAILED_STATS=new RuleTypes.DraftStats(null,null,null,null,0,0,null,null,List.of(),null,null);
+    private RuleTypes.DraftStats readDraftStats(String code) {
+        try { var result=draftStats.read(code); return result==null ? FAILED_STATS : result; }
+        catch(RuntimeException error) { return FAILED_STATS; }
     }
 }

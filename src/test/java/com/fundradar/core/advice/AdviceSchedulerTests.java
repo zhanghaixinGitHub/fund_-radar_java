@@ -18,6 +18,7 @@ class AdviceSchedulerTests {
         var predictions=mock(AiPredictionClient.class); var service=mock(AdviceService.class);
         var repo=mock(AdviceRepository.class); var outcomes=mock(AdviceOutcomeClient.class);
         var diagnoses=mock(DiagnosisClient.class); var diagnosisService=mock(DiagnosisService.class);
+        var draftStats=mock(DraftStatsClient.class); var ruleService=mock(RuleService.class);
         var clock=Clock.fixed(Instant.parse("2026-09-11T02:00:00Z"),ZoneOffset.UTC);
         UUID one=UUID.randomUUID(),two=UUID.randomUUID();
         when(positions.workerUsers(null,50)).thenReturn(List.of(one,two));
@@ -34,10 +35,16 @@ class AdviceSchedulerTests {
         when(outcomes.read(pending)).thenReturn(result);
         var facts=new DiagnosisTypes.Facts("006730",LocalDate.of(2026,9,10),"VALID","HOLDING_DIAGNOSIS_FACTS_V1",List.of());
         when(diagnoses.read("006730",LocalDate.of(2026,9,11))).thenReturn(facts);
-        new AdviceScheduler(mock(DataSource.class),positions,market,predictions,service,repo,outcomes,diagnoses,diagnosisService,clock).run();
+        var stats=new RuleTypes.DraftStats("006730","AVAILABLE",null,LocalDate.of(2026,9,10),600,540,"ACCUMULATED",Map.of("p50","0.05"),List.of(),"假设","HOLDING_RULE_DRAFT_STATS_V1");
+        when(draftStats.read("006730")).thenReturn(stats);
+        new AdviceScheduler(mock(DataSource.class),positions,market,predictions,service,repo,outcomes,diagnoses,diagnosisService,draftStats,ruleService,clock).run();
         verify(diagnoses,times(1)).read("006730",LocalDate.of(2026,9,11));
         verify(diagnosisService).archive(eq(one),eq(position),eq(facts),eq(clock.instant()));
         verify(diagnosisService).archive(eq(two),eq(position),eq(facts),eq(clock.instant()));
+        // 草案统计按基金跨用户复用，同批次内每基金只读取一次。
+        verify(draftStats,times(1)).read("006730");
+        verify(ruleService).refreshDraft(eq(one),eq("006730"),eq(stats),eq(clock.instant()));
+        verify(ruleService).refreshDraft(eq(two),eq("006730"),eq(stats),eq(clock.instant()));
         verify(predictions,times(1)).readExperiment("006730");
         verify(service).archive(eq(one),eq(position),eq(input),any(),eq(clock.instant()));
         verify(service).archive(eq(two),eq(position),eq(input),any(),eq(clock.instant()));
@@ -49,6 +56,7 @@ class AdviceSchedulerTests {
         var predictions=mock(AiPredictionClient.class); var service=mock(AdviceService.class);
         var repo=mock(AdviceRepository.class); var outcomes=mock(AdviceOutcomeClient.class);
         var diagnoses=mock(DiagnosisClient.class); var diagnosisService=mock(DiagnosisService.class);
+        var draftStats=mock(DraftStatsClient.class); var ruleService=mock(RuleService.class);
         var clock=Clock.fixed(Instant.parse("2026-09-11T02:00:00Z"),ZoneOffset.UTC);
         UUID user=UUID.randomUUID();
         when(positions.workerUsers(null,50)).thenReturn(List.of(user));
@@ -61,10 +69,11 @@ class AdviceSchedulerTests {
         when(predictions.readExperiment(anyString())).thenReturn(DirectionExperimentResponse.unavailable("006730"));
         when(repo.pending(eq(LocalDate.of(2026,9,11)),any(),eq(50))).thenReturn(List.of());
         doThrow(new IllegalStateException("db down")).when(diagnosisService).archive(eq(user),eq(broken),any(),any());
-        new AdviceScheduler(mock(DataSource.class),positions,market,predictions,service,repo,outcomes,diagnoses,diagnosisService,clock).run();
-        // 来源失败不抛出：单基金Python故障记INSUFFICIENT归档，不拖垮整批。
+        new AdviceScheduler(mock(DataSource.class),positions,market,predictions,service,repo,outcomes,diagnoses,diagnosisService,draftStats,ruleService,clock).run();
+        // 来源失败不抛出：单基金Python故障记INSUFFICIENT归档，不拖垮整批；草案统计读取失败同理跳过。
         verify(diagnosisService).archive(eq(user),eq(broken),isNull(),any());
         verify(diagnosisService).archive(eq(user),eq(healthy),isNull(),any());
+        verify(ruleService,never()).refreshDraft(any(),any(),any(),any());
         verify(service).archive(eq(user),eq(broken),any(),any(),any());
         verify(service).archive(eq(user),eq(healthy),any(),any(),any());
         verify(positions).job(eq("portfolio-advice"),eq("PARTIAL"),anyString(),eq(clock.instant()),eq(true));
