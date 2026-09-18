@@ -39,8 +39,13 @@ public class SimulationService {
     private UUID reader() { return CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_SELF_READ).userId(); }
     private UUID writer() { return CurrentUserContext.requirePermission(PermissionCode.SIM_PORTFOLIO_SELF_WRITE).userId(); }
     private UUID planner() { return CurrentUserContext.requirePermission(PermissionCode.SIM_PLAN_SELF_WRITE).userId(); }
-    public Overview overview() {
-        UUID user=reader();
+    public Overview overview() { return overview(reader()); }
+    /** 系统管理员按指定用户读取同一结构的模拟持仓总览；权限在服务层再次校验，防止被其他调用方绕过。 */
+    public Overview overviewForUser(UUID userId) {
+        CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_USER_READ);
+        return overview(userId);
+    }
+    private Overview overview(UUID user) {
         var positions=repo.positions(user);
         // 汇总待确认金额不依赖当前分页，避免大额待处理交易被分页隐藏。
         var totals=repo.pendingTotals(user);

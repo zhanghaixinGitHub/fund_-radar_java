@@ -150,10 +150,23 @@ class SimulationIntegrationTests {
         assertThrows(IllegalArgumentException.class,() -> service.savePlan(null,daily(0)));
         assertEquals(0,service.orders(1,20,null).totalCount());
     }
+    @Test void adminOverviewReadsTargetUserLedgerAndRequiresPortfolioUserRead() {
+        service.place(buy("1000")); settle("2026-09-08T09:00:00");
+        UUID target=user; var self=service.overview();
+        CurrentUserContext.set(new AuthenticatedUser(UUID.randomUUID(),"admin","管理员",AccountRole.SYSTEM_ADMIN,Set.of()));
+        var viewed=service.overviewForUser(target);
+        equal("1000",viewed.positions().get(0).shares());
+        assertEquals(self.marketValue(),viewed.marketValue()); assertEquals(self.rules(),viewed.rules());
+        assertTrue(service.overviewForUser(createUser()).positions().isEmpty());
+        login(target);
+        assertThrows(AccessDeniedException.class,() -> service.overviewForUser(target));
+    }
     @Test void httpRequiresSessionCsrfAndSerializesDecimalsAsStrings() throws Exception {
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(web).build();
         var base="/api/v1/sim-portfolios/current";
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(base))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/admin/users/"+UUID.randomUUID()+"/sim-portfolio/current"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
         String mobile="138"+String.format("%08d",ThreadLocalRandom.current().nextInt(100000000));
         var registration=mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/auth/register")

@@ -12,8 +12,8 @@ import com.fundradar.core.auth.api.UpdateUserRoleRequest;
 import com.fundradar.core.auth.api.UpdateUserStatusRequest;
 import com.fundradar.core.auth.service.AccountService;
 import com.fundradar.core.common.api.ApiResponse;
-import com.fundradar.core.portfolio.api.PortfolioSnapshotResponse;
-import com.fundradar.core.portfolio.service.PortfolioSnapshotService;
+import com.fundradar.core.simulation.SimulationService;
+import com.fundradar.core.simulation.SimulationTypes.Overview;
 import com.fundradar.core.watchlist.api.WatchlistCreditLedgerPageResponse;
 import com.fundradar.core.watchlist.api.WatchlistQuotaResponse;
 import com.fundradar.core.watchlist.credit.WatchlistCreditService;
@@ -45,16 +45,16 @@ import java.util.UUID;
 public class AdminUserController {
 
     private final AccountService accountService;
-    private final PortfolioSnapshotService portfolioSnapshotService;
+    private final SimulationService simulationService;
     private final WatchlistCreditService watchlistCreditService;
 
     public AdminUserController(
             AccountService accountService,
-            PortfolioSnapshotService portfolioSnapshotService,
+            SimulationService simulationService,
             WatchlistCreditService watchlistCreditService
     ) {
         this.accountService = accountService;
-        this.portfolioSnapshotService = portfolioSnapshotService;
+        this.simulationService = simulationService;
         this.watchlistCreditService = watchlistCreditService;
     }
 
@@ -129,11 +129,11 @@ public class AdminUserController {
         ));
     }
 
-    /** 系统管理员查看指定用户最新确认的持仓快照，供人工受控核对个人持仓金额。 */
-    @GetMapping("/users/{userId}/portfolio/current")
-    public ApiResponse<PortfolioSnapshotResponse> getUserCurrentPortfolio(@PathVariable UUID userId) {
+    /** 系统管理员受控查看指定用户的模拟账本持仓总览，结构与本人自助接口完全一致。 */
+    @GetMapping("/users/{userId}/sim-portfolio/current")
+    public ApiResponse<Overview> getUserSimPortfolio(@PathVariable UUID userId) {
         CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_USER_READ);
-        return ApiResponse.success(portfolioSnapshotService.getUserSnapshot(userId));
+        return ApiResponse.success(simulationService.overviewForUser(userId));
     }
 
     /** 经管理员确认后迁移旧单用户版本的历史关注列表，不自动触及提醒和持仓数据。 */
