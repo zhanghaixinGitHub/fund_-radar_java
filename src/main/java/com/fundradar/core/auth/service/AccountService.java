@@ -168,9 +168,17 @@ public class AccountService {
         ));
     }
 
-    /** 按页返回后台账户清单和每个用户的关注数，避免应用层 N+1 聚合。 */
-    public AdminUserPageResponse listUsers(int page, int pageSize) {
-        long total = jdbcClient.sql("SELECT COUNT(*) FROM user_account").query(Long.class).single();
+    /** 按页返回后台账户清单和每个用户的关注数，避免应用层 N+1 聚合；keyword 去首尾空白后按姓名包含或完整手机号匹配。 */
+    public AdminUserPageResponse listUsers(int page, int pageSize, String keyword) {
+        String normalizedKeyword = keyword == null ? "" : keyword.strip();
+        long total = jdbcClient.sql("""
+                        SELECT COUNT(*) FROM user_account account
+                        WHERE (:keyword = ''
+                               OR STRPOS(LOWER(account.display_name), LOWER(:keyword)) > 0
+                               OR account.mobile = :keyword)
+                        """)
+                .param("keyword", normalizedKeyword)
+                .query(Long.class).single();
         List<AdminUserResponse> users = jdbcClient.sql("""
                         WITH credit_totals AS (
                             SELECT user_id, COALESCE(SUM(credit_delta), 0) AS trial_credit_total
@@ -190,6 +198,9 @@ public class AccountService {
                         LEFT JOIN watchlist_item watchlist ON watchlist.user_id = account.user_id
                         LEFT JOIN credit_totals ON credit_totals.user_id = account.user_id
                         LEFT JOIN credit_locks ON credit_locks.user_id = account.user_id
+                        WHERE (:keyword = ''
+                               OR STRPOS(LOWER(account.display_name), LOWER(:keyword)) > 0
+                               OR account.mobile = :keyword)
                         GROUP BY account.user_id, account.mobile, account.display_name, account.status, account.role,
                                  account.created_at, credit_totals.trial_credit_total, credit_locks.trial_credit_locked
                         ORDER BY account.created_at DESC, account.user_id DESC
@@ -197,6 +208,7 @@ public class AccountService {
                         """)
                 .param("limit", pageSize)
                 .param("offset", page * pageSize)
+                .param("keyword", normalizedKeyword)
                 .query((row, rowNumber) -> new AdminUserResponse(
                         row.getObject("user_id", UUID.class),
                         maskMobile(row.getString("mobile")),

@@ -20,6 +20,7 @@ import com.fundradar.core.watchlist.credit.WatchlistCreditService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -58,15 +59,17 @@ public class AdminUserController {
         this.watchlistCreditService = watchlistCreditService;
     }
 
-    /** 分页查询账号及其本人关注数，不返回密码哈希或会话信息。 */
+    /** 分页查询账号及其本人关注数，不返回密码哈希或会话信息；keyword 按姓名包含或完整手机号匹配。 */
     @GetMapping("/users")
     public ApiResponse<AdminUserPageResponse> listUsers(
             @RequestParam(defaultValue = "0") @Min(value = 0, message = "页码不能小于 0。") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页数量至少为 1。")
-            @Max(value = 100, message = "每页数量不能超过 100。") int pageSize
+            @Max(value = 100, message = "每页数量不能超过 100。") int pageSize,
+            @RequestParam(required = false)
+            @Size(max = 50, message = "搜索关键字不能超过 50 个字符。") String keyword
     ) {
         CurrentUserContext.requirePermission(PermissionCode.USER_ACCOUNT_READ);
-        return ApiResponse.success(accountService.listUsers(page, pageSize));
+        return ApiResponse.success(accountService.listUsers(page, pageSize, keyword));
     }
 
     /** 创建用户或管理员；创建人的身份和动作写入审计表。 */
