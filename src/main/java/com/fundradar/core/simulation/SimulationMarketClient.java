@@ -52,6 +52,27 @@ public class SimulationMarketClient {
                     .body(Map.of("fundCodes",codes)).retrieve().toBodilessEntity();
         } catch (RuntimeException error) { LOGGER.warn("SimulationMarketClient.refresh   >>> public refresh request failed",error); throw unavailable(); }
     }
+    /** 抓取单基金费率档案（天天基金 f10 经 Python 解析）；费率结构无法自动解析时要求人工维护。 */
+    public FundFee fetchFees(String code) {
+        try {
+            var result = client.get().uri("/internal/v1/simulation/fees/{code}",code)
+                    .header("X-Service-Token",properties.getToken()).header("X-Trace-Id",TraceContext.getTraceId())
+                    .retrieve().body(FundFee.class);
+            if (result == null || !code.equals(result.fundCode())) throw unavailable();
+            return result;
+        } catch (HttpClientErrorException.UnprocessableEntity error) {
+            throw new SimulationException("SIM_FEE_MANUAL_REQUIRED","该基金费率结构无法自动解析，请人工维护："
+                    + detail(error.getResponseBodyAsString()));
+        } catch (HttpClientErrorException.NotFound error) { throw new SimulationException("SIM_NOT_FOUND","未找到已登记的基金资料。"); }
+        catch (RuntimeException error) { LOGGER.warn("SimulationMarketClient.fetchFees   >>> fee profile unavailable, fundCode={}",code,error); throw unavailable(); }
+    }
+    /** 从 FastAPI 错误响应中提取 detail 文案（{"detail":"..."}），解析失败时退回通用提示。 */
+    private String detail(String body) {
+        int start=body.indexOf("\"detail\":\"");
+        if(start<0) return "费率结构异常";
+        int end=body.indexOf('"',start+10);
+        return end>start ? body.substring(start+10,end) : "费率结构异常";
+    }
     private RestClient.RequestHeadersSpec<?> get(String path) {
         return client.get().uri(path).header("X-Service-Token",properties.getToken())
                 .header("X-Trace-Id",TraceContext.getTraceId());

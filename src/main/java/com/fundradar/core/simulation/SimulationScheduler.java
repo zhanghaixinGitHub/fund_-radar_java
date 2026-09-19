@@ -108,7 +108,8 @@ public class SimulationScheduler {
                 JobState refresh=repo.job("refresh:"+code);
                 boolean interval=refresh==null || Duration.between(refresh.attemptedAt(),now).toMinutes()>=30;
                 int hour=now.atZone(SimulationCalendar.ZONE).getHour();
-                boolean window=info.dividendsVerifiedAt()==null || hour==7 || hour==20 || hour==22 || info.refreshStatus().equals("FAILED");
+                // 深夜 0 点窗口兜底 22:00 之后公布的净值，保证当晚 24:00 前公布的净值当晚结算；次日 7 点继续兜底晚到数据。
+                boolean window=info.dividendsVerifiedAt()==null || hour==7 || hour==20 || hour==22 || hour==0 || info.refreshStatus().equals("FAILED");
                 if(interval && window) {
                     repo.job("refresh:"+code,"REQUESTED","已请求核验公共净值与分红。",now,false);
                     market.refresh(List.of(code));

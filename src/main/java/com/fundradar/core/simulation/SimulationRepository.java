@@ -61,12 +61,12 @@ public class SimulationRepository {
     public void insertOrder(Order o) {
         db.sql("""
             INSERT INTO sim_order(order_id,user_id,fund_code,fund_name,side,amount,shares,trade_date,eligible_date,
-                status,source_kind,request_key,request_hash,created_at)
-            VALUES (:id,:user,:code,:name,:side,:amount,:shares,:trade,:eligible,'PENDING',:source,:key,:hash,:now)
+                status,source_kind,request_key,request_hash,created_at,rule_version)
+            VALUES (:id,:user,:code,:name,:side,:amount,:shares,:trade,:eligible,'PENDING',:source,:key,:hash,:now,:rule)
             """).param("id",o.orderId()).param("user",o.userId()).param("code",o.fundCode()).param("name",o.fundName())
                 .param("side",o.side()).param("amount",o.amount()).param("shares",o.shares()).param("trade",o.tradeDate())
                 .param("eligible",o.eligibleDate()).param("source",o.sourceKind()).param("key",o.requestKey())
-                .param("hash",o.requestHash()).param("now",ts(o.createdAt())).update();
+                .param("hash",o.requestHash()).param("now",ts(o.createdAt())).param("rule",o.ruleVersion()).update();
         ledger(o.userId(),o.fundCode(),"submit:"+o.orderId(),"ORDER_SUBMITTED",o,o.createdAt());
         db.sql("""
             INSERT INTO sim_position(user_id,fund_code,snapshot,updated_at) VALUES (:user,:code,CAST(:data AS jsonb),:now)
@@ -109,9 +109,99 @@ public class SimulationRepository {
     }
     private Position withState(Position p,Map<String,BigDecimal> frozen,String issue) {
         BigDecimal f=frozen.getOrDefault(p.fundCode(),SimulationAccounting.ZERO);
-        return new Position(p.fundCode(),p.fundName(),p.shares(),f,issue==null ? p.shares().subtract(f).max(BigDecimal.ZERO) : BigDecimal.ZERO,
+        // 结算快照的可用份额已排除未到可用日的批次；此处再扣掉快照之后新下的待确认卖出冻结。
+        return new Position(p.fundCode(),p.fundName(),p.shares(),f,issue==null ? p.availableShares().subtract(f).max(BigDecimal.ZERO) : BigDecimal.ZERO,
                 p.cost(),p.marketValue(),p.holdingGain(),p.holdingGainRate(),p.realizedGain(),p.dividendGain(),p.receivableDividend(),
                 p.paidDividend(),p.cumulativeGain(),p.dailyGain(),p.totalBuy(),p.totalSell(),p.unitNav(),p.navDate(),issue);
+    }
+    /** 加载当前生效的模拟费率规则；只取生效区间覆盖今天的记录，同一基金申购费率取最新生效的一条。 */
+    public Map<String,FeeSchedule> loadFees() {
+        Map<String,List<FeeBand>> bands=new HashMap<>();
+        Map<String,BigDecimal> purchases=new HashMap<>();
+        db.sql("""
+            SELECT fund_code,fee_type,min_days,max_days,rate FROM sim_fee_rule
+            WHERE effective_from<=CURRENT_DATE AND (effective_to IS NULL OR effective_to>=CURRENT_DATE)
+            ORDER BY fund_code,fee_type,effective_from DESC
+            """).query((r,n) -> {
+            String code=r.getString(1);
+            if ("PURCHASE".equals(r.getString(2))) {
+                purchases.putIfAbsent(code,r.getBigDecimal(5));
+            } else {
+                bands.computeIfAbsent(code,c -> new ArrayList<>()).add(new FeeBand(r.getInt(3),r.getObject(4,Integer.class),r.getBigDecimal(5)));
+            }
+            return 0;
+        }).list();
+        var result=new HashMap<String,FeeSchedule>();
+        var codes=new HashSet<>(bands.keySet()); codes.addAll(purchases.keySet());
+        for (String code : codes) {
+            result.put(code,new FeeSchedule(purchases.getOrDefault(code,SimulationAccounting.ZERO),bands.getOrDefault(code,List.of())));
+        }
+        return result;
+    }
+    // ---------- 费率配置管理 ----------
+    /** 全量刷新单基金费率：先终止旧生效规则，再写入当日新版本；同日重复抓取按唯一键幂等更新。 */
+    public void upsertFees(FundFee fee) {
+        db.sql("""
+            UPDATE sim_fee_rule SET effective_to=CURRENT_DATE-1, updated_at=now()
+            WHERE fund_code=:code AND effective_to IS NULL AND effective_from<CURRENT_DATE
+            """).param("code",fee.fundCode()).update();
+        upsertFee(fee.fundCode(),fee.fundName(),"PURCHASE",0,null,fee.purchaseRate(),fee.discountInfo(),fee.dataSource());
+        for(var band : fee.redeemBands()) {
+            upsertFee(fee.fundCode(),fee.fundName(),"REDEEM",band.minDays(),band.maxDays(),band.rate(),null,fee.dataSource());
+        }
+    }
+    /** 申购规则 min_days 固定存 0 作档位占位，保证唯一索引下的同日幂等更新（NULL 不参与唯一约束）。 */
+    private void upsertFee(String code,String name,String type,int min,Integer max,BigDecimal rate,String discount,String source) {
+        db.sql("""
+            INSERT INTO sim_fee_rule(fund_code,fund_name,fee_type,min_days,max_days,rate,discount_info,data_source,effective_from,updated_at)
+            VALUES (:code,:name,:type,:min,:max,:rate,:discount,:source,CURRENT_DATE,now())
+            ON CONFLICT (fund_code,fee_type,min_days,effective_from) DO UPDATE SET
+                max_days=EXCLUDED.max_days, rate=EXCLUDED.rate, discount_info=EXCLUDED.discount_info,
+                fund_name=EXCLUDED.fund_name, data_source=EXCLUDED.data_source,
+                version=sim_fee_rule.version+1, updated_at=now()
+            """).param("code",code).param("name",name).param("type",type).param("min",min)
+                .param("max",max,java.sql.Types.INTEGER).param("rate",rate).param("discount",discount,java.sql.Types.VARCHAR)
+                .param("source",source).update();
+    }
+    /** 乐观锁更新费率；版本不匹配时抛冲突异常，防止两个管理员互相覆盖。 */
+    public void updateFeeRule(long ruleId,BigDecimal rate,int version) {
+        int changed=db.sql("""
+            UPDATE sim_fee_rule SET rate=:rate, version=version+1, updated_at=now()
+            WHERE rule_id=:id AND version=:version
+            """).param("rate",rate).param("id",ruleId).param("version",version).update();
+        if(changed==0) throw new SimulationException("SIM_FEE_VERSION_CONFLICT","费率配置已被他人修改，请刷新后重试。");
+    }
+    public FeeRuleRow findFeeRule(long ruleId) {
+        return db.sql("SELECT * FROM sim_fee_rule WHERE rule_id=:id").param("id",ruleId)
+                .query(feeRuleMapper()).optional().orElseThrow(() -> new SimulationException("SIM_NOT_FOUND","未找到该费率规则。"));
+    }
+    /** 费率规则分页：按基金代码过滤时走 ix_sim_fee_rule_fund 索引，总数单独 COUNT。 */
+    public Page<FeeRuleRow> pageRules(String fundCode,int page,int pageSize) {
+        long total=db.sql("SELECT count(*) FROM sim_fee_rule WHERE (:code IS NULL OR fund_code=:code)")
+                .param("code",fundCode,java.sql.Types.VARCHAR).query(Long.class).single();
+        var items=db.sql("""
+            SELECT * FROM sim_fee_rule WHERE (:code IS NULL OR fund_code=:code)
+            ORDER BY fund_code,fee_type,min_days NULLS LAST,effective_from DESC
+            LIMIT :limit OFFSET :offset
+            """).param("code",fundCode,java.sql.Types.VARCHAR).param("limit",pageSize).param("offset",(page-1)*pageSize)
+                .query(feeRuleMapper()).list();
+        return new Page<>(items,page,pageSize,total);
+    }
+    /** 模拟范围内出现过的全部基金代码：持仓与定投计划取并集，作为全量费率初始化的范围。 */
+    public List<String> simFundCodes() {
+        return db.sql("""
+            SELECT fund_code FROM (
+                SELECT DISTINCT fund_code FROM sim_position
+                UNION SELECT DISTINCT fund_code FROM sim_plan
+            ) codes ORDER BY fund_code
+            """).query(String.class).list();
+    }
+    private RowMapper<FeeRuleRow> feeRuleMapper() {
+        return (r,n) -> new FeeRuleRow(r.getLong("rule_id"),r.getString("fund_code"),r.getString("fund_name"),
+                r.getString("fee_type"),r.getObject("min_days",Integer.class),r.getObject("max_days",Integer.class),
+                r.getBigDecimal("rate"),r.getString("discount_info"),r.getString("data_source"),
+                r.getObject("effective_from",LocalDate.class),r.getObject("effective_to",LocalDate.class),
+                r.getInt("version"),r.getTimestamp("updated_at")==null?null:r.getTimestamp("updated_at").toInstant());
     }
     public void issue(UUID user,String code,String message,Instant now) {
         db.sql("UPDATE sim_position SET issue=:message,updated_at=:now WHERE user_id=:user AND fund_code=:code")
@@ -271,7 +361,7 @@ public class SimulationRepository {
         return (r,n) -> new Order(r.getObject("order_id",UUID.class),r.getObject("user_id",UUID.class),r.getString("fund_code"),r.getString("fund_name"),
                 r.getString("side"),r.getBigDecimal("amount"),r.getBigDecimal("shares"),r.getObject("trade_date",LocalDate.class),r.getObject("eligible_date",LocalDate.class),
                 r.getString("status"),r.getString("source_kind"),r.getString("request_key"),r.getString("request_hash"),instant(r,"created_at"),
-                instant(r,"confirmed_at"),decode(r.getString("execution"),Execution.class));
+                instant(r,"confirmed_at"),decode(r.getString("execution"),Execution.class),r.getString("rule_version"));
     }
     private RowMapper<Plan> planMapper() {
         return (r,n) -> new Plan(r.getObject("plan_id",UUID.class),r.getObject("user_id",UUID.class),r.getString("fund_code"),r.getString("fund_name"),

@@ -23,6 +23,7 @@ import static com.fundradar.core.simulation.SimulationAccountingTests.*;
 @Transactional
 class SimulationIntegrationTests {
     @Autowired SimulationService service;
+    @Autowired SimulationFeeService fees;
     @Autowired SimulationRepository repo;
     @Autowired JdbcClient db;
     @Autowired org.springframework.web.context.WebApplicationContext web;
@@ -60,9 +61,12 @@ class SimulationIntegrationTests {
         assertThrows(SimulationException.class,() -> service.place(sell("1")));
         assertThrows(SimulationException.class,() -> service.place(new OrderRequest(request.requestKey(),"000001","BUY",num("2000"),null,false)));
         equal("1000",service.overview().pendingBuyAmount());
+        assertNull(service.overview().dailyGain());
         assertEquals(0,db.sql("SELECT count(*) FROM watchlist_item WHERE user_id=:user").param("user",user).query(Integer.class).single());
         settle("2026-09-08T09:00:00");
         equal("1000",service.overview().positions().get(0).shares());
+        equal("100",service.overview().positions().get(0).dailyGain());
+        equal("100",service.overview().dailyGain());
         long count=service.ledger(1,100,null).totalCount(); settle("2026-09-08T09:00:00");
         assertEquals(count,service.ledger(1,100,null).totalCount());
         assertEquals("CONFIRMED",repo.order(user,first.orderId()).status());
@@ -249,5 +253,104 @@ class SimulationIntegrationTests {
         settle("2026-09-10T09:01:00");
         var curve=service.performance("000001",date("2026-09-01"),date("2026-09-10"));
         assertEquals(3,curve.size()); assertEquals(date("2026-09-09"),curve.get(1).date()); assertNull(curve.get(1).dailyGain());
+    }
+    /** 写入一条费率规则；min/max 仅赎回分档使用，申购传 null。 */
+    void fee(String type,Integer min,Integer max,String rate) {
+        db.sql("""
+            INSERT INTO sim_fee_rule(fund_code,fund_name,fee_type,min_days,max_days,rate,data_source,effective_from)
+            VALUES ('000001','测试普通混合基金',:type,:min,:max,:rate,'MANUAL','2026-01-01')
+            """).param("type",type).param("min",min,java.sql.Types.INTEGER).param("max",max,java.sql.Types.INTEGER)
+                .param("rate",num(rate)).update();
+    }
+    @Test void orderConfirmsSameEveningWhenNavPublishedAndSharesUsableNextDay() {
+        var buy=service.place(buy("1000"));             // 9-07 上午下单
+        settle("2026-09-07T21:00:00");                  // 当晚净值公布后结算
+        assertEquals("CONFIRMED",repo.order(user,buy.orderId()).status());
+        var p=service.overview().positions().get(0);
+        equal("1000",p.shares()); equal("0",p.availableShares());   // 确认当晚份额未到可用日
+        settle("2026-09-08T09:00:00");
+        equal("1000",service.overview().positions().get(0).availableShares());  // 次一交易日可卖
+    }
+    @Test void purchaseFeeAppliesFromFeeRuleTable() {
+        fee("PURCHASE",null,null,"0.0008");
+        var buy=service.place(buy("100")); settle("2026-09-07T21:00:00");
+        var execution=repo.order(user,buy.orderId()).execution();
+        equal("0.08",execution.fee()); equal("99.92006395",execution.netAmount());
+        equal("99.92006395",execution.shares());
+        equal("100",service.overview().positions().get(0).cost());
+    }
+    @Test void redeemFeeBandsApplyOnSellFromRuleTable() {
+        fee("REDEEM",0,6,"0.015"); fee("REDEEM",7,29,"0.005"); fee("REDEEM",30,null,"0");
+        var buy=service.place(buy("1000")); settle("2026-09-07T21:00:00");  // 9-07 确认批次
+        now=at("2026-09-09T09:00:00");
+        var sell=service.place(sell("500")); settle("2026-09-09T21:00:00"); // 持有 2 天 → 1.5%
+        var execution=repo.order(user,sell.orderId()).execution();
+        equal("550",execution.grossAmount()); equal("8.25",execution.fee()); equal("541.75",execution.netAmount());
+        var p=service.overview().positions().get(0);
+        equal("500",p.shares()); equal("41.75",p.realizedGain());
+    }
+    @Test void v1ConfirmedOrderKeepsOriginalExecutionWhenRulesUpgrade() {
+        var buy=service.place(buy("1000")); settle("2026-09-07T21:00:00");
+        db.sql("UPDATE sim_order SET rule_version='CN_NAV_SIM_V1_NO_FEE' WHERE order_id=:id").param("id",buy.orderId()).update();
+        fee("PURCHASE",null,null,"0.0008");
+        settle("2026-09-08T09:00:00");  // 费率已配置，但 V1 历史订单重放仍全额换算
+        var execution=repo.order(user,buy.orderId()).execution();
+        equal("1000",execution.shares()); assertNull(execution.fee());
+    }
+    @Test void valuationAdvancesEvenWhenPendingOrderNavNotPublished() {
+        var buy=service.place(buy("1000")); settle("2026-09-07T21:00:00");
+        now=at("2026-09-09T09:00:00"); var stuck=service.place(buy("1100"));
+        current=market(List.of(nav("2026-09-07","1"),nav("2026-09-08","1.1"),nav("2026-09-10","1.2")),List.of());
+        settle("2026-09-10T09:00:00");  // 9-09 订单净值未公布，但估值不冻结
+        assertEquals("PENDING",repo.order(user,stuck.orderId()).status());
+        var p=service.overview().positions().get(0);
+        assertEquals(date("2026-09-10"),p.navDate()); equal("1000",p.shares()); equal("1200",p.marketValue());
+    }
+    // ---------- 费率管理 API ----------
+    FundFee feeProfile(String purchase,List<FeeBand> bands) {
+        return new FundFee("000001","测试普通混合基金",num(purchase),num(purchase),null,bands,"EASTMONEY_F10");
+    }
+    long insertPurchaseRule(String code,String rate) {
+        return db.sql("""
+            INSERT INTO sim_fee_rule(fund_code,fund_name,fee_type,min_days,max_days,rate,data_source,effective_from)
+            VALUES (:code,'测试普通混合基金','PURCHASE',0,NULL,:rate,'MANUAL','2026-01-01') RETURNING rule_id
+            """).param("code",code).param("rate",num(rate)).query(Long.class).single();
+    }
+    @Test void upsertFeesTerminatesOldRulesAndIsIdempotentWithinDay() {
+        fee("PURCHASE",null,null,"0.015");  // 旧申购规则 2026-01-01 生效
+        var profile=feeProfile("0.0015",List.of(new FeeBand(0,6,num("0.015")),new FeeBand(7,null,num("0.005"))));
+        repo.upsertFees(profile); repo.upsertFees(profile);  // 同日重复抓取幂等，不产生重复规则
+        var rows=repo.pageRules("000001",1,50).items();
+        var active=rows.stream().filter(r -> r.effectiveTo()==null).toList();
+        assertEquals(3,active.size());  // 1 申购 + 2 档赎回
+        var purchase=active.stream().filter(r -> r.feeType().equals("PURCHASE")).findFirst().orElseThrow();
+        equal("0.0015",purchase.rate()); assertEquals("EASTMONEY_F10",purchase.dataSource());
+        assertEquals(1,rows.stream().filter(r -> r.effectiveTo()!=null).count());  // 旧申购规则已终止
+    }
+    @Test void updateFeeRuleUsesOptimisticLocking() {
+        long id=insertPurchaseRule("000001","0.01");
+        repo.updateFeeRule(id,num("0.012"),1);  // 成功，版本升为 2
+        assertThrows(SimulationException.class,() -> repo.updateFeeRule(id,num("0.013"),1));  // 旧版本冲突
+        var row=repo.findFeeRule(id);
+        equal("0.012",row.rate()); assertEquals(2,row.version());
+    }
+    @Test void pageRulesFiltersAndCounts() {
+        insertPurchaseRule("000001","0.015"); insertPurchaseRule("000002","0.01");
+        var page=repo.pageRules("000001",1,10);
+        assertEquals(1,page.totalCount()); assertEquals("000001",page.items().get(0).fundCode());
+        assertEquals(2,repo.pageRules(null,1,10).totalCount());
+    }
+    @Test void refreshFundFetchesProfileAndPersistsRules() {
+        var profile=feeProfile("0.0015",List.of(new FeeBand(0,6,num("0.015")),new FeeBand(7,null,num("0.005"))));
+        when(client.fetchFees("000001")).thenReturn(profile);
+        fees.refreshFund("000001");
+        var active=repo.pageRules("000001",1,50).items().stream().filter(r -> r.effectiveTo()==null).toList();
+        assertEquals(3,active.size());
+        equal("0.0015",active.stream().filter(r -> r.feeType().equals("PURCHASE")).findFirst().orElseThrow().rate());
+    }
+    @Test void updateRuleRejectsInvalidRate() {
+        long id=insertPurchaseRule("000001","0.01");
+        assertThrows(SimulationException.class,() -> fees.updateRule(id,num("1.5"),1));
+        assertThrows(SimulationException.class,() -> fees.updateRule(id,num("-0.1"),1));
     }
 }
