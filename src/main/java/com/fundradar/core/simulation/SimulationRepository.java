@@ -215,11 +215,15 @@ public class SimulationRepository {
                 .param("status",p.status()).param("version",p.version()).param("key",p.requestKey()).param("now",ts(p.createdAt())).update();
     }
     public void period(Plan plan,UUID order,String status,String message,Instant now) {
+        periodAt(plan,plan.scheduledDate(),plan.executionDate(),order,status,message,now);
+    }
+    /** 手动补录的期次按真实买入日落账，不占用计划自身排期日期；同日已有排期记录时不重复写入。 */
+    public void periodAt(Plan plan,LocalDate scheduled,LocalDate execution,UUID order,String status,String message,Instant now) {
         db.sql("""
             INSERT INTO sim_plan_execution(execution_id,plan_id,scheduled_date,execution_date,plan_version,status,order_id,message,created_at)
             VALUES (:id,:plan,:scheduled,:execution,:version,:status,:order,:message,:now) ON CONFLICT DO NOTHING
-            """).param("id",UUID.randomUUID()).param("plan",plan.planId()).param("scheduled",plan.scheduledDate())
-                .param("execution",plan.executionDate()).param("version",plan.version()).param("status",status).param("order",order)
+            """).param("id",UUID.randomUUID()).param("plan",plan.planId()).param("scheduled",scheduled)
+                .param("execution",execution).param("version",plan.version()).param("status",status).param("order",order)
                 .param("message",message).param("now",ts(now)).update();
     }
     public Page<Period> periods(UUID user,UUID plan,int page,int size) {

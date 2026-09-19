@@ -45,6 +45,8 @@ public final class SimulationTypes {
                          String status, UUID orderId, String message, Instant createdAt) {}
     public record Page<T>(List<T> items, int page, int pageSize, long totalCount) {}
     public record JobState(String status, Instant attemptedAt, Instant completedAt, String message) {}
+    /** 管理员手动补录定投的结果；按前一交易日净值补入一期，统计只含本次实际处理。 */
+    public record RecurringRunResult(Instant ranAt, int plansChecked, int ordersCreated, int plansSkipped, String message) {}
     public record Overview(List<Position> positions, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal marketValue, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal holdingGain,
                            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal pendingBuyAmount, int pendingOrders,
                            boolean complete, JobState job, String rules) {}

@@ -189,6 +189,13 @@ public class SimulationService {
         });
     }
 
+    /** 单次手动补录统计；由后台调度汇总，不回溯历史期次。 */
+    public record PlanRunStats(int plansChecked,int ordersCreated,int plansSkipped) {
+        public static PlanRunStats zero() { return new PlanRunStats(0,0,0); }
+        public PlanRunStats plus(PlanRunStats other) {
+            return new PlanRunStats(plansChecked+other.plansChecked,ordersCreated+other.ordersCreated,plansSkipped+other.plansSkipped);
+        }
+    }
     /** 仅由后台调度调用；逐用户加锁，不伪造浏览器身份。 */
     void processUser(UUID user,SimulationCalendar calendar,Map<String,Market> markets,Instant now) {
         tx.executeWithoutResult(status -> {
@@ -205,6 +212,48 @@ public class SimulationService {
                 } catch(SimulationException error) { repo.issue(user,code,error.getMessage(),now); }
             }
         });
+    }
+    /** 管理员手动补录：每个进行中计划按前一交易日净值立即补入一期并结算，不改变后续自动执行日期。 */
+    PlanRunStats catchUpUser(UUID user,SimulationCalendar calendar,Map<String,Market> markets,Instant now) {
+        var stats=new PlanRunStats[]{PlanRunStats.zero()};
+        tx.executeWithoutResult(status -> {
+            repo.lock(user);
+            LocalDate today=calendar.today(now);
+            var codes=new LinkedHashSet<String>();
+            for(var plan : repo.plans(user)) if(plan.status().equals("ACTIVE")) {
+                codes.add(plan.fundCode());
+                stats[0]=stats[0].plus(new PlanRunStats(1,0,0)).plus(catchUpPlan(plan,calendar,markets.get(plan.fundCode()),today,now));
+            }
+            repo.positions(user).forEach(p -> codes.add(p.fundCode()));
+            for(String code : codes) {
+                Market market=markets.get(code);
+                if(market==null) { repo.issue(user,code,"行情服务暂不可用，保留上次估值。",now); continue; }
+                try {
+                    List<Order> orders=repo.orders(user,code);
+                    Calculation calculation=SimulationAccounting.calculate(code,market.fundName(),orders,market,calendar,calendar.today(now));
+                    repo.saveCalculation(user,calculation,now);
+                } catch(SimulationException error) { repo.issue(user,code,error.getMessage(),now); }
+            }
+        });
+        return stats[0];
+    }
+    /** 补录以真实买入日落账；确认日取下一交易日，净值已发布时本轮结算即确认，同一天重复触发由请求键去重。 */
+    private PlanRunStats catchUpPlan(Plan plan,SimulationCalendar calendar,Market market,LocalDate today,Instant now) {
+        PlanRunStats skipped=new PlanRunStats(0,0,1);
+        LocalDate tradeDay,eligible;
+        try { tradeDay=calendar.previous(today); eligible=calendar.next(tradeDay); }
+        catch(SimulationException error) { return skipped; }
+        if(plan.endDate()!=null && tradeDay.isAfter(plan.endDate())) return skipped;
+        if(plan.maxPeriods()!=null && plan.orderedPeriods()>=plan.maxPeriods()) return skipped;
+        if(market==null || !market.supported() || market.navs().stream().noneMatch(n -> n.navDate().equals(tradeDay))) return skipped;
+        if(repo.positions(plan.userId()).stream().anyMatch(p -> p.fundCode().equals(plan.fundCode()) && p.issue()!=null)) return skipped;
+        String key="catchup:"+plan.planId()+":"+tradeDay;
+        if(repo.findRequest(plan.userId(),key)!=null) return skipped;
+        UUID orderId=UUID.randomUUID();
+        repo.insertOrder(new Order(orderId,plan.userId(),plan.fundCode(),plan.fundName(),"BUY",plan.amount(),null,
+                tradeDay,eligible,"PENDING","RECURRING",key,repo.hash(key),now,null,null));
+        repo.periodAt(plan,tradeDay,tradeDay,orderId,"ORDERED","管理员手动补录一期，按 "+tradeDay+" 净值确认。",now);
+        return new PlanRunStats(0,1,0);
     }
     private void executePlan(Plan initial,SimulationCalendar calendar,Market market,Instant now) {
         Plan plan=initial; LocalDate today=calendar.today(now),lastExecuted=null;

@@ -22,6 +22,12 @@ public final class SimulationCalendar {
         return result;
     }
     public LocalDate next(LocalDate date) { return atOrAfter(date.plusDays(1)); }
+    /** 严格早于给定日期的最近交易日；日历不足时拒绝，不用普通日期顶替。 */
+    public LocalDate previous(LocalDate date) {
+        LocalDate result = days.lower(date);
+        if (result == null) throw missing();
+        return result;
+    }
     public boolean isSession(LocalDate date) { return days.contains(date); }
     public LocalDate tradeDate(Instant now) {
         var time = now.atZone(ZONE);

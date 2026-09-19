@@ -104,6 +104,25 @@ class SimulationIntegrationTests {
         assertEquals("ENDED",service.plans().get(0).status()); assertEquals(2,service.periods(p.planId(),1,20).totalCount());
         settle("2026-09-09T10:00:00"); equal("200",service.plans().get(0).investedAmount());
     }
+    @Test void manualCatchUpBuysAtPreviousTradingDayNavWithoutShiftingSchedule() {
+        var p=service.savePlan(null,daily(null));
+        assertEquals(date("2026-09-07"),p.executionDate());
+        current=market(List.of(nav("2026-09-04","0.8"),nav("2026-09-07","1"),nav("2026-09-08","1.1")),List.of());
+        now=at("2026-09-07T09:30:00");
+        var stats=service.catchUpUser(user,calendar(),Map.of("000001",current),now);
+        assertEquals(1,stats.plansChecked()); assertEquals(1,stats.ordersCreated()); assertEquals(0,stats.plansSkipped());
+        var order=service.orders(1,20,null).items().get(0);
+        assertEquals(date("2026-09-04"),order.tradeDate());
+        assertEquals("CONFIRMED",repo.order(user,order.orderId()).status());
+        equal("125",service.overview().positions().get(0).shares());
+        var plan=service.plans().get(0);
+        assertEquals(date("2026-09-07"),plan.executionDate()); assertEquals(1,plan.orderedPeriods()); equal("100",plan.investedAmount());
+        var again=service.catchUpUser(user,calendar(),Map.of("000001",current),now);
+        assertEquals(0,again.ordersCreated()); assertEquals(1,again.plansSkipped());
+        assertEquals(1,service.orders(1,20,null).totalCount());
+        settle("2026-09-07T10:00:00");
+        assertEquals(2,service.orders(1,20,null).totalCount());
+    }
     @Test void missedPlanPeriodIsNotBackfilledAtKnownHistoricalNav() {
         var p=service.savePlan(null,daily(null));
         settle("2026-09-08T11:00:00");
