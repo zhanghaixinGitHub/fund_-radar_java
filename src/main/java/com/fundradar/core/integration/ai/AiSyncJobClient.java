@@ -73,6 +73,34 @@ public class AiSyncJobClient {
         }
     }
 
+    /** 费率任务只传基金代码；省略参数表示全量，后台抓取和回写不占用该请求。 */
+    public AiSyncJobStatus startSimulationFees(String fundCode) {
+        try {
+            AiSyncJobStatus payload=restClient.post().uri(builder -> {
+                builder.path("/internal/v1/funds/sync-jobs/simulation-fees");
+                if (fundCode!=null) builder.queryParam("fundCode",fundCode);
+                return builder.build();
+            }).header(SERVICE_TOKEN_HEADER,properties.getToken())
+                    .header(TRACE_ID_HEADER,TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+            if (payload==null) throw new AiServiceUnavailableException("empty fee sync job",null);
+            return payload;
+        } catch (RestClientResponseException error) {
+            if (error.getStatusCode().value()==409) throw new MarketNavSyncInProgressException("sync in progress",error);
+            throw unavailable(error);
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException error) {
+            throw error;
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
+    /** 单只与全量任务共用一种状态，页面刷新时读取最近执行结果。 */
+    public AiSyncJobStatus getLatestSimulationFees() {
+        try {
+            return restClient.get().uri("/internal/v1/funds/sync-jobs/simulation-fees/latest")
+                    .header(SERVICE_TOKEN_HEADER,properties.getToken())
+                    .header(TRACE_ID_HEADER,TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
     /** 创建基金市场日净值增量同步任务，立即返回任务标识和初始状态。 */
     public AiSyncJobStatus startMarketNavIncremental() {
         try {

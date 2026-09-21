@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -139,7 +140,8 @@ public class SimulationRepository {
         return result;
     }
     // ---------- 费率配置管理 ----------
-    /** 全量刷新单基金费率：先终止旧生效规则，再写入当日新版本；同日重复抓取按唯一键幂等更新。 */
+    /** 全量刷新单基金费率：旧规则终止与新档位写入必须同事务完成，任何失败均保留原规则。 */
+    @Transactional
     public void upsertFees(FundFee fee) {
         db.sql("""
             UPDATE sim_fee_rule SET effective_to=CURRENT_DATE-1, updated_at=now()
@@ -175,15 +177,27 @@ public class SimulationRepository {
         return db.sql("SELECT * FROM sim_fee_rule WHERE rule_id=:id").param("id",ruleId)
                 .query(feeRuleMapper()).optional().orElseThrow(() -> new SimulationException("SIM_NOT_FOUND","未找到该费率规则。"));
     }
-    /** 费率规则分页：按基金代码过滤时走 ix_sim_fee_rule_fund 索引，总数单独 COUNT。 */
+    /** 保留内部单只刷新和旧调用的基金代码精确过滤口径。 */
     public Page<FeeRuleRow> pageRules(String fundCode,int page,int pageSize) {
-        long total=db.sql("SELECT count(*) FROM sim_fee_rule WHERE (:code IS NULL OR fund_code=:code)")
-                .param("code",fundCode,java.sql.Types.VARCHAR).query(Long.class).single();
-        var items=db.sql("""
-            SELECT * FROM sim_fee_rule WHERE (:code IS NULL OR fund_code=:code)
-            ORDER BY fund_code,fee_type,min_days NULLS LAST,effective_from DESC
+        return pageRules(fundCode,null,page,pageSize);
+    }
+    /**
+     * 关键词按代码或名称做不区分大小写的包含匹配；% 和 _ 也按普通文字查询。
+     * 精确代码和关键词同时传入时取交集；总数与分页使用同一条件，避免页数与结果不一致。
+     */
+    public Page<FeeRuleRow> pageRules(String fundCode,String keyword,int page,int pageSize) {
+        String filter="""
+            WHERE (:code IS NULL OR fund_code=:code)
+              AND (:keyword IS NULL OR strpos(fund_code,:keyword)>0 OR strpos(lower(fund_name),lower(:keyword))>0)
+            """;
+        long total=db.sql("SELECT count(*) FROM sim_fee_rule "+filter)
+                .param("code",fundCode,java.sql.Types.VARCHAR).param("keyword",keyword,java.sql.Types.VARCHAR)
+                .query(Long.class).single();
+        var items=db.sql("SELECT * FROM sim_fee_rule "+filter+"""
+            ORDER BY fund_code,fee_type,min_days NULLS LAST,effective_from DESC,rule_id
             LIMIT :limit OFFSET :offset
-            """).param("code",fundCode,java.sql.Types.VARCHAR).param("limit",pageSize).param("offset",(page-1)*pageSize)
+            """).param("code",fundCode,java.sql.Types.VARCHAR).param("keyword",keyword,java.sql.Types.VARCHAR)
+                .param("limit",pageSize).param("offset",(page-1)*pageSize)
                 .query(feeRuleMapper()).list();
         return new Page<>(items,page,pageSize,total);
     }

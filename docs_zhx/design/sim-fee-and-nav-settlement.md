@@ -249,6 +249,22 @@ UPDATE sim_order
 
 ## 变更记录
 
+### 2026-09-21｜费率规则按代码或名称搜索
+
+- `GET /api/v1/admin/sim-fee-rules` 新增可选 `keyword`：首尾去空格、最多 50 字符，包含匹配已存规则的基金代码或名称，名称不区分大小写。空关键词显示全部；`%`、`_` 按普通字符处理。
+- 原 `fundCode` 精确过滤保留，同时传入关键词时取交集；COUNT 与分页使用相同条件，权限仍为 `SIM_FEE_RULE_ADMIN`。只查询已存规则，不触发同步或修改费率。
+- 前端复用基金市场搜索卡片，支持按钮或回车查询、清空恢复全部、新查询回第一页及翻页保留关键词。
+- 验证：新增 4 项公开接口契约测试，连同原内部费率契约和计费单测共 19 项通过；Vue lint、类型检查和构建通过，浏览器用本地接口替身验证布局、代码/名称、分页、空结果和清空。未连接真实数据库或重启用户 IDE 中的 Java 服务；新关键词逻辑需 Java 重新加载后生效。
+
+### 2026-09-21｜费率抓取统一接入同步任务
+
+- 页面抓取区迁至数据同步的“模拟费率同步”；一键同步增加第六项，原维护页仅保留查询与编辑。
+- 原 `/api/v1/admin/sim-fee-rules/refresh/{fundCode}` 和 `/init-all` HTTP 入口移除，改用 `POST /api/v1/sync-jobs/simulation-fees`，可选 `fundCode`；状态读取 `/simulation-fees/latest`。
+- Python 与其他任务共用后台执行器和互斥，四并发抓取公共费率；Java 提供服务令牌保护的代码范围及档案回写接口，仍独占 `sim_fee_rule` 的存储职责。
+- 一键同步和费率任务均需 `SYNC_JOB_START` 与 `SIM_FEE_RULE_ADMIN`，不扩大数据运营角色的写入权限。每只基金的旧规则终止和新档位写入同事务完成。
+- 本次不调整原有费率计算和覆盖口径；完整契约、失败处理与验收项见 `C:/WebStormProject/workSpace05/docs_zhx/design/simulation-fee-sync-center.md`。
+- Java 和 Python 必须一起加载本次更新；Python 的 `CORE_SERVICE_BASE_URL` 默认为 `http://127.0.0.1:8080`，非本机部署需指向 Java 内部地址，认证复用已有 `AI_SERVICE_TOKEN`。
+
 ### 2026-09-19｜初版：费率配置表、净值公布即确认、估值解耦、赎回分档、深夜窗口、V2 重放口径
 
 ### 2026-09-19｜补充：抓取与后台维护接口落地、两处设计修订

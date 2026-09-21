@@ -39,6 +39,17 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startSimulationFees(String fundCode) {
+        return toResponse(aiSyncJobClient.startSimulationFees(fundCode));
+    }
+
+    @Override
+    public SyncJobResponse getLatestSimulationFees() {
+        AiSyncJobStatus source=aiSyncJobClient.getLatestSimulationFees();
+        return source==null ? null : toResponse(source);
+    }
+
+    @Override
     public SyncJobResponse startMarketNavIncremental() {
         SyncJobResponse response = toResponse(aiSyncJobClient.startMarketNavIncremental());
         LOGGER.info(

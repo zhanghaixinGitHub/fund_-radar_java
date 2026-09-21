@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -38,12 +39,30 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 一键创建SPX及原四类同步的后台串行批次，与单项任务共用启动权限。 */
+    /** 一键创建六项任务；新增费率写入仍要求原费率维护权限，不能借批次绕过。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        CurrentUserContext.requirePermission(PermissionCode.SIM_FEE_RULE_ADMIN);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.success(syncJobService.startAll()));
+    }
+
+    /** 费率同步与其他同步任务共用后台互斥；fundCode 为空表示原模拟范围全量初始化。 */
+    @PostMapping("/simulation-fees")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startSimulationFees(@RequestParam(required=false) String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        CurrentUserContext.requirePermission(PermissionCode.SIM_FEE_RULE_ADMIN);
+        if (fundCode!=null && !fundCode.matches("[0-9]{6}")) throw new IllegalArgumentException("请输入6位基金代码。");
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startSimulationFees(fundCode)));
+    }
+
+    /** 只读最近费率任务，不发起抓取或写库。 */
+    @GetMapping("/simulation-fees/latest")
+    public ApiResponse<SyncJobResponse> getLatestSimulationFees() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestSimulationFees());
     }
 
     /** 查询当前 Python 进程最近一键同步批次，刷新页面不重复发起任务。 */
