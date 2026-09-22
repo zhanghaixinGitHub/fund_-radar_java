@@ -39,7 +39,7 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 一键创建六项任务；新增费率写入仍要求原费率维护权限，不能借批次绕过。 */
+    /** 一键创建五项任务；新增费率写入仍要求原费率维护权限，不能借批次绕过。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
