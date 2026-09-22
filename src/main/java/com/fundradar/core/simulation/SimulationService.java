@@ -17,7 +17,8 @@ import static com.fundradar.core.simulation.SimulationAccounting.ZERO;
 /** 本人模拟买卖与定投业务；公共行情在事务外读取，事务内统一锁定用户账本。 */
 @Service
 public class SimulationService {
-    public static final String RULES="模拟交易：人民币场外净值基金，沪深开市日日历，15:00 截止，当日净值公布即确认，份额次一交易日可卖；申购费与分档赎回费按配置费率模拟，现金分红，先进先出；未模拟渠道限购和临时暂停。";
+    /** 所有类型统一按净值记模拟账；开放日、持有期等真实产品限制不作为模拟准入条件。 */
+    public static final String RULES="所有基金类型统一按已同步单位净值模拟：采用沪深开市日日历，15:00 截止，取得交易日正式净值且分红资料核验通过后确认，份额次一交易日可卖；缺少对应日期净值时继续等待，不改用其他日期成交。申赎费按已配置费率模拟，未配置时按零计费；现金分红、先进先出。未模拟实际申赎开放日、持有期、渠道限购和临时暂停；场内基金不使用交易所成交价，货币基金不另计万份收益，外币份额直接按净值数值模拟、不换汇；不代表真实交易结果。";
     public record OrderRequest(@NotNull UUID requestKey,@NotBlank @Pattern(regexp="[0-9]{6}") String fundCode,
                                @NotBlank @Pattern(regexp="BUY|SELL") String side,
                                @DecimalMin("0.01") @DecimalMax("100000000") @Digits(integer=9,fraction=2) BigDecimal amount,

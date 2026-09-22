@@ -54,6 +54,36 @@ class SimulationIntegrationTests {
     void settle(String time) { now=at(time); service.processUser(user,calendar(),Map.of("000001",current),now); }
     PlanRequest daily(Integer max) { return new PlanRequest(UUID.randomUUID(),"000001",num("100"),"DAILY",1,date("2026-09-07"),null,max,0); }
 
+    /** QDII 放开后可预览、买卖和建定投；延迟公布净值仍等待原交易日，不能提前确认或换价。 */
+    @Test void qdiiBuySellAndPlanUseUnifiedRulesAndWaitForPublishedNav() {
+        String code="018853",name="博时标普石油天然气指数(QDII)-C-CNY";
+        current=new Market(code,name,true,null,"TUSHARE_PRO_FUND",List.of(
+                new Nav(date("2026-09-07"),num("1.1914"),num("1.1914"),date("2026-09-09"),"qdii-buy"),
+                new Nav(date("2026-09-09"),num("1.21"),num("1.21"),date("2026-09-10"),"qdii-sell")),
+                List.of(),at("2026-09-10T08:00:00"),"SUCCEEDED",null);
+        assertTrue(service.preview(code).supported());
+        var buy=service.place(new OrderRequest(UUID.randomUUID(),code,"BUY",num("334"),null,false));
+        var plan=service.savePlan(null,new PlanRequest(UUID.randomUUID(),code,num("10"),"DAILY",1,
+                date("2026-09-10"),null,null,0));
+        assertEquals("ACTIVE",plan.status());
+        now=at("2026-09-08T09:00:00");
+        service.processUser(user,calendar(),Map.of(code,current),now);
+        assertEquals("PENDING",repo.order(user,buy.orderId()).status());
+        now=at("2026-09-09T09:00:00");
+        service.processUser(user,calendar(),Map.of(code,current),now);
+        var bought=repo.order(user,buy.orderId());
+        assertEquals("CONFIRMED",bought.status());
+        equal("1.1914",bought.execution().unitNav());
+        var sell=service.place(new OrderRequest(UUID.randomUUID(),code,"SELL",null,bought.execution().shares(),false));
+        equal("0",service.preview(code).availableShares());
+        now=at("2026-09-10T09:00:00");
+        service.processUser(user,calendar(),Map.of(code,current),now);
+        assertEquals("CONFIRMED",repo.order(user,sell.orderId()).status());
+        equal("1.21",repo.order(user,sell.orderId()).execution().unitNav());
+        equal("0",service.overview().positions().get(0).shares());
+        assertTrue(service.overview().positions().get(0).realizedGain().signum()>0);
+    }
+
     @Test void buyIsIdempotentAndPendingSharesCannotBeSold() {
         var request=buy("1000"); var first=service.place(request);
         assertEquals(first.orderId(),service.place(request).orderId());
