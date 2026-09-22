@@ -77,7 +77,7 @@ class Direction1dTests {
     }
     @Test void unauthenticatedAndForeignFollowNeverCallsPython() {
         var repo=mock(Direction1dRepository.class);var client=mock(Direction1dClient.class);
-        var service=new Direction1dService(repo,client,true,true);
+        var service=new Direction1dService(repo,client);
         assertThrows(RuntimeException.class,()->service.current("001632"));verifyNoInteractions(client,repo);
         UUID owner=UUID.randomUUID(),other=UUID.randomUUID();
         CurrentUserContext.set(new AuthenticatedUser(other,"test","测试",AccountRole.FUND_USER,Set.of(PermissionCode.FUND_READ,PermissionCode.WATCHLIST_SELF_READ)));
@@ -86,7 +86,7 @@ class Direction1dTests {
     }
     @Test void cannotInjectUserOrOverrideThreshold() {
         var service=mock(Direction1dService.class);var controller=new Direction1dController(service,mock(Direction1dStatistics.class));
-        assertThrows(IllegalArgumentException.class,()->controller.subscription(Map.of("enabled",true,"userId",UUID.randomUUID())));
+        assertThrows(IllegalArgumentException.class,()->controller.generate("001632",Map.of("userId",UUID.randomUUID())));
         assertThrows(IllegalArgumentException.class,()->controller.generate("001632",Map.of("threshold",.1)));
         verifyNoInteractions(service);
     }

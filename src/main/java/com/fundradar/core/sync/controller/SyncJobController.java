@@ -39,13 +39,27 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 一键创建五项任务；新增费率写入仍要求原费率维护权限，不能借批次绕过。 */
+    /** 一键创建六项任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
         CurrentUserContext.requirePermission(PermissionCode.SIM_FEE_RULE_ADMIN);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.success(syncJobService.startAll()));
+    }
+
+    /** 管理员手动检查全部有效关注基金；无需系统或个人实验开关。 */
+    @PostMapping("/direction-1d-predictions")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startDirection1dPredictions() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startDirection1dPredictions()));
+    }
+
+    @GetMapping("/direction-1d-predictions/latest")
+    public ApiResponse<SyncJobResponse> getLatestDirection1dPredictions() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestDirection1dPredictions());
     }
 
     /** 费率同步与其他同步任务共用后台互斥；fundCode 为空表示原模拟范围全量初始化。 */

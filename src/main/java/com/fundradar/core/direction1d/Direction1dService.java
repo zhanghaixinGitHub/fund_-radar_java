@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.watchlist.service.WatchlistRequiredException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.time.*;
 import java.util.*;
@@ -13,10 +12,8 @@ import java.util.*;
 @Service
 public class Direction1dService {
     private final Direction1dRepository repo; private final Direction1dClient client;
-    private final boolean enabled; private final boolean forecastEnabled;
-    public Direction1dService(Direction1dRepository repo,Direction1dClient client,
-            @Value("${direction1d.enabled:false}") boolean enabled,@Value("${direction1d.forecast-enabled:true}") boolean forecastEnabled) {
-        this.repo=repo; this.client=client; this.enabled=enabled; this.forecastEnabled=forecastEnabled;
+    public Direction1dService(Direction1dRepository repo,Direction1dClient client) {
+        this.repo=repo; this.client=client;
     }
     public UUID user(boolean write) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
@@ -24,15 +21,9 @@ public class Direction1dService {
         return CurrentUserContext.requirePermission(write?PermissionCode.WATCHLIST_SELF_WRITE:PermissionCode.WATCHLIST_SELF_READ).userId();
     }
     public Map<String,Object> status() {
-        UUID user=user(false); Map<String,Object> out=new LinkedHashMap<>();
-        out.put("enabled",repo.enabled(user)); out.put("backendEnabled",enabled); out.put("forecastEnabled",forecastEnabled);
+        user(false); Map<String,Object> out=new LinkedHashMap<>();
         out.put("modelReleased",false); out.put("upProbability",null); out.put("experimentStatus","EXPERIMENTAL");
         out.put("health",repo.health()); out.put("python",Direction1dPolicy.view(client.get("/status"))); return out;
-    }
-    public Map<String,Object> subscription(boolean value) {
-        UUID user=user(true);
-        if(value&&!enabled) throw new IllegalArgumentException("BACKEND_DISABLED");
-        repo.subscribe(user,value); return status();
     }
     public Map<String,Object> coverage(String keyword,String type,int page,int size) {
         UUID user=user(false); validatePage(page,size);
@@ -58,11 +49,10 @@ public class Direction1dService {
         result.put("coverage",Direction1dPolicy.view(coverage.path("items").get(0)));
         result.put("window",Direction1dPolicy.view(coverage.path("window")));
         result.put("history",repo.history(user,code,LocalDate.of(2021,1,1),LocalDate.of(2026,12,31),1,1));
-        result.put("enabled",repo.enabled(user)); return result;
+        return result;
     }
     public Map<String,Object> generate(String code) {
         UUID user=user(true); requireFund(user,code);
-        if(!enabled||!forecastEnabled||!repo.enabled(user)) throw new IllegalArgumentException("SUBSCRIPTION_DISABLED");
         JsonNode status=checkedStatus(); JsonNode w=status.path("window");
         if(!"OPEN".equals(w.path("status").asText())) throw new IllegalArgumentException("MISSED_DEADLINE");
         var coverage=client.coverage(List.of(code)); UUID scope=repo.scope(user,LocalDate.parse(w.path("target_nav_date").asText()),
@@ -80,12 +70,12 @@ public class Direction1dService {
     public Map<String,Object> process(UUID user,UUID scope,JsonNode coverage,JsonNode w) {
         String code=coverage.path("fund_code").asText(); LocalDate target=LocalDate.parse(w.path("target_nav_date").asText());
         UUID existing=repo.currentPublic(code,target);
-        if(existing!=null) { repo.confirm(existing); repo.link(user,existing,scope); return Map.of("forecastId",existing,"status","PREDICTED"); }
+        if(existing!=null) { repo.confirm(existing); repo.link(user,existing,scope); return Map.of("forecastId",existing,"status","PREDICTED","reused",true); }
         if(coverage.path("group_id").isNull() || coverage.path("group_id").isMissingNode()) {
             String reason=coverage.path("status").asText(); repo.attempt(scope,code,target,null,reason,Direction1dPolicy.view(coverage.path("reason_codes")));
             return Map.of("status",reason);
         }
-        if(!"OPEN".equals(w.path("status").asText()) || !enabled || !forecastEnabled) {
+        if(!"OPEN".equals(w.path("status").asText())) {
             repo.attempt(scope,code,target,null,"MISSED_DEADLINE",List.of("MISSED_DEADLINE")); return Map.of("status","MISSED_DEADLINE");
         }
         for(JsonNode reason:coverage.path("reason_codes")) {
@@ -98,9 +88,10 @@ public class Direction1dService {
         JsonNode result=client.get("/forecast-jobs/"+job); String state=result.path("state").asText();
         if("SUCCEEDED".equals(state)) {
             JsonNode payload=result.path("result");
-            UUID id=repo.archive(job,payload.path("payload_json").asText(),payload.path("content_hash").asText(),code);
+            var saved=repo.archive(job,payload.path("payload_json").asText(),payload.path("content_hash").asText(),code);
+            UUID id=saved.forecastId();
             repo.link(user,id,scope); repo.attempt(scope,code,target,job,"PREDICTED",List.of());
-            return Map.of("forecastId",id,"status","PREDICTED");
+            return Map.of("forecastId",id,"status","PREDICTED","reused",!saved.created());
         }
         String reason=result.path("result").path("reason").asText(state);
         if("FAILED".equals(state)) state=switch(reason) {

@@ -33,6 +33,17 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startDirection1dPredictions() {
+        return toResponse(aiSyncJobClient.startDirection1dPredictions());
+    }
+
+    @Override
+    public SyncJobResponse getLatestDirection1dPredictions() {
+        var source=aiSyncJobClient.getLatestDirection1dPredictions();
+        return source==null ? null : toResponse(source);
+    }
+
+    @Override
     public SyncJobResponse getLatestAll() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestAll();
         return source == null ? null : toResponse(source);

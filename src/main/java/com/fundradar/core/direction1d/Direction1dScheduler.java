@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
@@ -13,7 +12,6 @@ import java.util.*;
 
 /** 独立30分钟后台；先核对旧原文，再组织当前范围，最后请求本周固定训练。 */
 @Component
-@ConditionalOnProperty(name="direction1d.enabled",havingValue="true")
 public class Direction1dScheduler {
     private static final Logger LOG=LoggerFactory.getLogger(Direction1dScheduler.class);
     private final DataSource dataSource; private final Direction1dRepository repo; private final Direction1dService service;
@@ -33,7 +31,7 @@ public class Direction1dScheduler {
         }
     }
     public void run() {
-        repo.health("RUNNING",0,0,"正在检查到期答案和本人订阅范围。",false);
+        repo.health("RUNNING",0,0,"正在核对到期答案并检查全部关注基金。",false);
         int checked=0,failed=0; UUID after=null;
         if(review) while(true) {
             var batch=repo.reviewPage(after); if(batch.isEmpty())break;

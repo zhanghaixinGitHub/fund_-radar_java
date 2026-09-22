@@ -147,4 +147,20 @@ class SyncAllTests {
         assertEquals(List.of("POST /internal/v1/funds/sync-jobs/simulation-fees",
                 "GET /internal/v1/funds/sync-jobs/simulation-fees/latest"),calls);
     }
+
+    @Test
+    void predictionTaskUsesSyncPermissionsAndForwardsToBackgroundQueue() throws Exception {
+        String path="/api/v1/sync-jobs/direction-1d-predictions";
+        mvc.perform(post(path)).andExpect(status().isUnauthorized());
+        login(PermissionCode.SYNC_JOB_READ);
+        mvc.perform(post(path)).andExpect(status().isForbidden());
+        assertTrue(calls.isEmpty());
+        login(PermissionCode.SYNC_JOB_START,PermissionCode.SYNC_JOB_READ);
+        upstreamBody=upstreamBody.replace("MARKET_ALL","DIRECTION_1D_PREDICTIONS");
+        mvc.perform(post(path)).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.jobType").value("DIRECTION_1D_PREDICTIONS"));
+        mvc.perform(get(path+"/latest")).andExpect(status().isOk());
+        assertEquals(List.of("POST /internal/v1/funds/sync-jobs/direction-1d-predictions",
+                "GET /internal/v1/funds/sync-jobs/direction-1d-predictions/latest"),calls);
+    }
 }

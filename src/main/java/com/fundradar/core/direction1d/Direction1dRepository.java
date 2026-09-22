@@ -22,27 +22,35 @@ public class Direction1dRepository {
     public String encode(Object value) { try { return json.writeValueAsString(value); } catch(Exception e) { throw new IllegalStateException(e); } }
     public JsonNode decode(String value) { try { return json.readTree(value); } catch(Exception e) { throw new IllegalStateException("档案原文无法读取",e); } }
     public Instant now() { return db.sql("SELECT clock_timestamp()").query((r,n)->r.getTimestamp(1).toInstant()).single(); }
-    public boolean enabled(UUID user) {
-        return db.sql("SELECT EXISTS(SELECT 1 FROM direction_1d_subscription WHERE user_id=:u AND enabled)").param("u",user).query(Boolean.class).single();
-    }
-    public void subscribe(UUID user,boolean enabled) {
-        db.sql("""
-          INSERT INTO direction_1d_subscription(user_id,enabled,enabled_at,disabled_at)
-          VALUES(:u,:e,CASE WHEN :e THEN clock_timestamp() END,CASE WHEN NOT :e THEN clock_timestamp() END)
-          ON CONFLICT(user_id) DO UPDATE SET enabled=:e,updated_at=clock_timestamp(),
-          enabled_at=CASE WHEN :e THEN clock_timestamp() ELSE direction_1d_subscription.enabled_at END,
-          disabled_at=CASE WHEN NOT :e THEN clock_timestamp() ELSE direction_1d_subscription.disabled_at END
-          """).param("u",user).param("e",enabled).update();
-    }
+    // 取消订阅限制后仍按有效账号、角色和关注权限取范围；历史订阅表只保留，不再读取或写入。
+    private static final String ELIGIBLE_USER = """
+          u.status='ACTIVE'
+          AND EXISTS(SELECT 1 FROM system_role r WHERE r.role_code=u.role AND r.status='ACTIVE')
+          AND (SELECT count(*) FROM role_permission p WHERE p.role_code=u.role
+            AND p.permission_code IN ('FUND_READ','WATCHLIST_SELF_READ','WATCHLIST_SELF_WRITE'))=3
+          """;
+
+    /** 自动任务分页扫描有关注基金的有效账号，不要求曾经开启个人实验。 */
     public List<UUID> users(UUID after) {
-        return db.sql("""
-          SELECT s.user_id FROM direction_1d_subscription s JOIN user_account u USING(user_id)
-          WHERE s.enabled AND u.status='ACTIVE' AND (:after::uuid IS NULL OR s.user_id>:after)
-            AND EXISTS(SELECT 1 FROM system_role r WHERE r.role_code=u.role AND r.status='ACTIVE')
-            AND (SELECT count(*) FROM role_permission p WHERE p.role_code=u.role
-              AND p.permission_code IN ('FUND_READ','WATCHLIST_SELF_READ','WATCHLIST_SELF_WRITE'))=3
-          ORDER BY s.user_id LIMIT 50
+        return db.sql("SELECT u.user_id FROM user_account u WHERE " + ELIGIBLE_USER + """
+          AND (:after::uuid IS NULL OR u.user_id>:after)
+          AND EXISTS(SELECT 1 FROM watchlist_item w WHERE w.user_id=u.user_id)
+          ORDER BY u.user_id LIMIT 50
           """).param("after",after).query(UUID.class).list();
+    }
+
+    /** 同步任务仅交换去重基金代码；不向 Python 暴露账号、金额或个人关注归属。 */
+    public List<String> predictionFundCodes(String after) {
+        return db.sql("SELECT DISTINCT w.fund_code FROM watchlist_item w JOIN user_account u USING(user_id) WHERE "
+                + ELIGIBLE_USER + " AND w.fund_code>:after ORDER BY w.fund_code LIMIT 100")
+                .param("after",after).query(String.class).list();
+    }
+
+    /** 每只基金生成一次公共预测，再分页关联到实际关注它的有效账号。 */
+    public List<UUID> predictionUsers(String code,UUID after) {
+        return db.sql("SELECT u.user_id FROM user_account u JOIN watchlist_item w USING(user_id) WHERE "
+                + ELIGIBLE_USER + " AND w.fund_code=:code AND (:after::uuid IS NULL OR u.user_id>:after) ORDER BY u.user_id LIMIT 50")
+                .param("code",code).param("after",after).query(UUID.class).list();
     }
     public List<Map<String,Object>> watchPage(UUID user,String after,int size) {
         return db.sql("""
@@ -72,12 +80,14 @@ public class Direction1dRepository {
         return db.sql("SELECT forecast_id FROM direction_1d_forecast WHERE fund_code=:code AND target_nav_date=:target ORDER BY stored_at LIMIT 1")
                 .param("code",code).param("target",target).query(UUID.class).optional().orElse(null);
     }
-    public UUID archive(UUID job,String raw,String hash,String expectedCode) {
+    /** 是否新建由持有数据库去重锁的事务决定，避免自动任务和手动任务并发时重复计为新生成。 */
+    public record ArchivedForecast(UUID forecastId,boolean created) {}
+    public ArchivedForecast archive(UUID job,String raw,String hash,String expectedCode) {
         JsonNode p=Direction1dPolicy.validate(json,raw,hash,expectedCode,now());
-        UUID saved=tx.execute(ignored->{
+        ArchivedForecast saved=tx.execute(ignored->{
             db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key,721109))").param("key",p.path("task_key").asText()).query((r,n)->0).list();
             UUID existing=currentPublic(expectedCode,LocalDate.parse(p.path("target_nav_date").asText()));
-            if(existing!=null) return existing;
+            if(existing!=null) return new ArchivedForecast(existing,false);
             UUID id=UUID.randomUUID();
             db.sql("""
               INSERT INTO direction_1d_forecast(forecast_id,source_job_id,protocol,cohort_id,fund_code,base_nav_date,target_nav_date,
@@ -92,9 +102,9 @@ public class Direction1dRepository {
                     .param("generated",Timestamp.from(Direction1dPolicy.instant(p,"generated_at"))).update();
             for(JsonNode b:p.path("branches")) saveScore(id,b,false);
             for(JsonNode b:p.path("baselines")) saveScore(id,b,true);
-            return id;
+            return new ArchivedForecast(id,true);
         });
-        confirm(saved); return saved;
+        confirm(saved.forecastId()); return saved;
     }
     private void saveScore(UUID id,JsonNode b,boolean baseline) {
         db.sql("""
@@ -130,7 +140,7 @@ public class Direction1dRepository {
           SELECT :u,f.forecast_id,:scope FROM direction_1d_forecast f
           WHERE f.forecast_id=:id AND clock_timestamp()<f.deadline_at
             AND EXISTS(SELECT 1 FROM watchlist_item w WHERE w.user_id=:u AND w.fund_code=f.fund_code)
-            AND EXISTS(SELECT 1 FROM direction_1d_subscription s WHERE s.user_id=:u AND s.enabled)
+            AND EXISTS(SELECT 1 FROM user_account u WHERE u.user_id=:u AND u.status='ACTIVE')
           ON CONFLICT DO NOTHING
           """).param("u",user).param("id",forecast).param("scope",scope).update();
     }

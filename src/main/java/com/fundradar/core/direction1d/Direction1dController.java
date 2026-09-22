@@ -16,10 +16,6 @@ public class Direction1dController {
     public Direction1dController(Direction1dService service,Direction1dStatistics statistics) { this.service=service; this.statistics=statistics; }
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","no-store, private"); }
     @GetMapping("/prediction-1d/status") public ApiResponse<?> status() { return ApiResponse.success(service.status()); }
-    @PutMapping("/prediction-1d/subscription") public ApiResponse<?> subscription(@RequestBody Map<String,Object> body) {
-        if(!body.keySet().equals(Set.of("enabled")) || !(body.get("enabled") instanceof Boolean)) throw new IllegalArgumentException("INVALID_SUBSCRIPTION");
-        return ApiResponse.success(service.subscription((Boolean)body.get("enabled")));
-    }
     @GetMapping("/prediction-1d/coverage") public ApiResponse<?> coverage(@RequestParam(required=false) String keyword,
         @RequestParam(required=false) String fundType,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
         return ApiResponse.success(service.coverage(keyword,fundType,page,pageSize));
@@ -42,7 +38,7 @@ public class Direction1dController {
         return ApiResponse.success(statistics.read(service.user(false),startDate,endDate,labelBasis));
     }
     @ExceptionHandler(IllegalArgumentException.class) public ResponseEntity<?> invalid(IllegalArgumentException error) {
-        String code=error.getMessage(); boolean conflict=Set.of("MISSED_DEADLINE","SUBSCRIPTION_DISABLED","BACKEND_DISABLED","CLOCK_SKEW").contains(code);
+        String code=error.getMessage(); boolean conflict=Set.of("MISSED_DEADLINE","CLOCK_SKEW").contains(code);
         return ResponseEntity.status(conflict?409:400).body(ApiResponse.failure("DIRECTION_1D_REJECTED",conflict?code:"请求参数或实验数据未通过校验。"));
     }
     @ExceptionHandler(NoSuchElementException.class) public ResponseEntity<?> missing() { return ResponseEntity.status(404).body(ApiResponse.failure("NOT_FOUND","本人没有该记录。")); }

@@ -9,8 +9,14 @@ import java.util.UUID;
 /** 同步中心的对外业务契约，便于后续登记更多独立同步任务。 */
 public interface SyncJobService {
 
-    /** 创建覆盖SPX、市场数据及模拟费率的五项后台串行批次。 */
+    /** 创建覆盖SPX、市场数据、关注基金预测及模拟费率的六项后台串行批次。 */
     SyncJobResponse startAll();
+
+    /** 检查全部有效关注基金并生成本期一日预测，已有留档复用。 */
+    SyncJobResponse startDirection1dPredictions();
+
+    /** 只读同步中心最近预测任务的真实进度。 */
+    SyncJobResponse getLatestDirection1dPredictions();
 
     /** 基金代码为空时同步模拟范围全部费率，否则只同步指定基金。 */
     SyncJobResponse startSimulationFees(String fundCode);

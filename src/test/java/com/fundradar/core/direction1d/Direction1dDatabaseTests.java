@@ -12,7 +12,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** 真实本地PostgreSQL事务测试；合成账户/样本在测试结束全部回滚，不计实际预测。 */
-@SpringBootTest(properties={"direction1d.enabled=false","simulation.enabled=false","portfolio.advice.enabled=false"})
+@SpringBootTest(properties={"direction1d.initial-delay=PT24H","simulation.enabled=false","portfolio.advice.enabled=false"})
 @Transactional
 class Direction1dDatabaseTests {
     @Autowired Direction1dRepository repo;
@@ -23,7 +23,6 @@ class Direction1dDatabaseTests {
         user=createUser();other=createUser();forecast=UUID.randomUUID();
         db.sql("INSERT INTO watchlist_item(watchlist_item_id,user_id,fund_code,fund_type) VALUES(:id,:u,'123456','STOCK')")
                 .param("id",UUID.randomUUID()).param("u",user).update();
-        repo.subscribe(user,true);
         UUID scope=repo.scope(user,LocalDate.of(2026,9,14),List.of(Map.of("fund_code","123456","fund_type","STOCK")));
         String raw="{\"fund_code\":\"123456\",\"group_id\":\"CN_EQUITY\",\"product_family_id\":\"synthetic-family\",\"input\":{\"event_status\":\"UNKNOWN\"},\"kind\":\"REPLAY_DIAGNOSTIC\"}";
         db.sql("""
@@ -53,9 +52,24 @@ class Direction1dDatabaseTests {
         assertEquals(2,branches.size());
         for(var b:branches){assertEquals(0L,b.get("assessed_count"));assertEquals(1L,b.get("pending_count"));assertNull(b.get("accuracy"));}
     }
-    @Test void cancellationAndPauseKeepOldAuthorizedHistory() {
-        repo.subscribe(user,false);db.sql("DELETE FROM watchlist_item WHERE user_id=:u").param("u",user).update();
-        assertEquals(forecast,repo.detail(user,forecast).get("forecastId"));assertFalse(repo.enabled(user));
+    @Test void cancellationKeepsOldAuthorizedHistory() {
+        db.sql("DELETE FROM watchlist_item WHERE user_id=:u").param("u",user).update();
+        assertEquals(forecast,repo.detail(user,forecast).get("forecastId"));
+    }
+    @Test void noSubscriptionAndOldDisabledSubscriptionBothParticipateButInactiveUsersDoNot() {
+        assertTrue(repo.users(null).contains(user));
+        assertTrue(repo.predictionFundCodes("").contains("123456"));
+        assertEquals(List.of(user),repo.predictionUsers("123456",null));
+        db.sql("INSERT INTO direction_1d_subscription(user_id,enabled) VALUES(:u,false)").param("u",user).update();
+        assertTrue(repo.users(null).contains(user));
+        // 旧开关关闭也能关联新预测；仍只关联当前关注的基金。
+        db.sql("DELETE FROM direction_1d_user_forecast WHERE user_id=:u").param("u",user).update();
+        UUID scope=repo.scope(user,LocalDate.of(2026,9,14),List.of());
+        repo.link(user,forecast,scope);
+        assertEquals(forecast,repo.detail(user,forecast).get("forecastId"));
+        db.sql("UPDATE user_account SET status='DISABLED' WHERE user_id=:u").param("u",user).update();
+        assertFalse(repo.users(null).contains(user));
+        assertEquals(List.of(),repo.predictionUsers("123456",null));
     }
     @Test void allNewColumnsHavePhysicalChineseComments() {
         long missing=db.sql("""
