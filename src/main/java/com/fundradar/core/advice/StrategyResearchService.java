@@ -14,7 +14,7 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-/** 受权限和单次规模控制的独立研究账本，保留输入和四组对照，不触碰个人模拟现金。 */
+/** 独立研究账本：一直持有与冻结的多周期模型组合对照，不触碰个人模拟现金或切换模型。 */
 @Service
 public class StrategyResearchService {
     private final MultiPredictionClient client;private final JdbcClient db;private final ObjectMapper json;
@@ -32,18 +32,7 @@ public class StrategyResearchService {
         ObjectNode result=json.createObjectNode();result.put("runId",id.toString());
         try {
             var inputs=client.get("/funds/"+request.fundCode()+"/replay-inputs?start="+request.startDate()+"&end="+request.endDate());
-            var frames=new ArrayList<StrategyReplayEngine.Frame>();
-            for(var frame:inputs.path("frames")) frames.add(json.treeToValue(frame,StrategyReplayEngine.Frame.class));
-            var comparisons=result.putObject("comparisons");
-            for(String mode:List.of("V2","V1","BUY_HOLD","V2_WITHOUT_EVENTS")) comparisons.set(mode,json.valueToTree(engine.run(frames,StrategyReplayEngine.defaultConfig(),mode)));
-            result.set("inputSnapshot",inputs);result.put("status","SUCCEEDED");
-            var v2=comparisons.path("V2");var hold=comparisons.path("BUY_HOLD");
-            double increment=v2.path("netReturn").asDouble()-hold.path("netReturn").asDouble();
-            result.put("excessReturnVsHold",increment);
-            result.put("eventIncrement",v2.path("netReturn").asDouble()-comparisons.path("V2_WITHOUT_EVENTS").path("netReturn").asDouble());
-            result.put("eventAdoptionDecision","KEEP_NEUTRAL_FACTS：本批公告无方向规则，增量为零，保留事实不提高权重");
-            result.put("strategyAdoptionDecision",increment>0?"本开发区间收益高于一直持有；保留V2实验，尚非长期优势证明":"本开发区间未超过一直持有；保留失败结论和V2实验身份，不声称策略有效");
-            result.put("comparisonProtocol","STRATEGY_COMPARISON_V1：同基金/日历/初资/费用/到账，净收益主指标；回撤、换手和空仓期同时披露");
+            result.setAll(compareModels(inputs));
         } catch(Exception error) {
             result.put("status","FAILED");result.put("errorCode",error instanceof MultiPredictionClient.PredictionServiceFailure e?e.detail().code():"STRATEGY_REPLAY_FAILED");
             result.put("errorMessage",error instanceof MultiPredictionClient.PredictionServiceFailure e?e.detail().summary():"回放未完成，请查研究任务日志");
@@ -52,6 +41,66 @@ public class StrategyResearchService {
         result.put("resultHash",Direction1dPolicy.hash(result.toString()));
         db.sql("UPDATE strategy_replay_run SET status=:status,result=CAST(:result AS jsonb),finished_at=clock_timestamp() WHERE run_id=:id AND user_id=:u")
                 .param("status",result.path("status").asText()).param("result",result.toString()).param("id",id).param("u",user).update();
+        return result;
+    }
+
+    /**
+     * 模型只改变预测输入，资金、日期、费用和决策规则保持相同。
+     * 完整核对每一天实际模型身份，防止候选名称下混入基础回退包，或少算失败日期得到虚高成绩。
+     */
+    ObjectNode compareModels(JsonNode inputs) throws com.fasterxml.jackson.core.JsonProcessingException {
+        if(!"MODEL_BUNDLE_REPLAY_V1".equals(inputs.path("comparisonVersion").asText()))
+            throw new IllegalArgumentException("模型比较输入版本未就绪，请更新预测服务");
+        var frames=new ArrayList<StrategyReplayEngine.Frame>();
+        for(var frame:inputs.path("frames")) frames.add(json.treeToValue(frame,StrategyReplayEngine.Frame.class));
+        var bundles=inputs.path("modelComparisons");
+        if(!bundles.isArray() || bundles.size()>4) throw new IllegalArgumentException("模型组合数量不正确");
+        ObjectNode result=json.createObjectNode();
+        var comparisons=result.putObject("comparisons");
+        var models=result.putObject("comparisonModels");
+        comparisons.set("BUY_HOLD",json.valueToTree(engine.run(frames,StrategyReplayEngine.defaultConfig(),"BUY_HOLD")));
+        models.putObject("BUY_HOLD").put("label","买入后一直持有").put("role","BENCHMARK");
+        var ids=new HashSet<String>();
+        for(var bundle:bundles) {
+            String id=bundle.path("id").asText();
+            if(!id.matches("MODEL_[a-f0-9]{16}") || !ids.add(id)) throw new IllegalArgumentException("模型组合编号不正确");
+            var refs=new HashMap<String,JsonNode>();
+            for(var ref:bundle.path("modelRefs")) {
+                if(refs.put(ref.path("horizonId").asText(),ref)!=null) throw new IllegalArgumentException("组合周期重复");
+            }
+            if(!refs.keySet().equals(Set.of("T5_V1","T20_V1","M6_V1"))) throw new IllegalArgumentException("模型组合必须覆盖全部三个周期");
+            if(bundle.path("frames").size()!=frames.size()) throw new IllegalArgumentException("模型组合比较日期不一致");
+            var modelFrames=new ArrayList<StrategyReplayEngine.Frame>();
+            int index=0;
+            for(var raw:bundle.path("frames")) {
+                var frame=json.treeToValue(raw,StrategyReplayEngine.Frame.class);
+                var base=frames.get(index++);
+                if(!frame.date().equals(base.date()) || frame.nav().compareTo(base.nav())!=0
+                        || !Objects.equals(frame.cashDividend(),base.cashDividend())
+                        || frame.redemptionPaused()!=base.redemptionPaused()) throw new IllegalArgumentException("模型组合的行情条件不同");
+                // 除 predictions 外，其他决策输入也必须完全一致。
+                var actualInput=(ObjectNode)json.valueToTree(frame.input());actualInput.remove("predictions");
+                var baseInput=(ObjectNode)json.valueToTree(base.input());baseInput.remove("predictions");
+                if(!actualInput.equals(baseInput)) throw new IllegalArgumentException("模型组合的决策条件不同");
+                var seen=new HashSet<String>();
+                for(var signal:frame.input().predictions()) {
+                    var ref=refs.get(signal.horizonId());
+                    if(ref==null || !seen.add(signal.horizonId())
+                            || !Set.of("UP","NON_UP").contains(signal.direction())
+                            || !ref.path("modelId").asText().equals(signal.modelId())
+                            || !ref.path("modelHash").asText().equals(signal.modelHash())
+                            || ref.path("activationRevision").asLong()!=signal.activationRevision())
+                        throw new IllegalArgumentException("实际推理模型与声明不一致");
+                }
+                if(!seen.equals(refs.keySet())) throw new IllegalArgumentException("该日多周期预测不完整");
+                modelFrames.add(frame);
+            }
+            comparisons.set(id,json.valueToTree(engine.run(modelFrames,StrategyReplayEngine.defaultConfig(),"V2")));
+            var metadata=bundle.deepCopy();((ObjectNode)metadata).remove("frames");models.set(id,metadata);
+        }
+        result.set("inputSnapshot",inputs);result.set("excludedModels",inputs.path("excludedModels"));
+        result.put("status","SUCCEEDED");
+        result.put("comparisonProtocol","MODEL_BUNDLE_REPLAY_V1：同基金/日期/本金/费用/决策规则，只更换冻结的多周期预测模型；本次结果不自动采用赢家");
         return result;
     }
     /**

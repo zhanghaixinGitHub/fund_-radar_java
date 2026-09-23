@@ -39,7 +39,7 @@ public class StrategyReplayEngine {
     public Result run(List<Frame> frames,Config config,String mode) {
         if(frames.isEmpty()||frames.size()>3000||config.initialCash().signum()<=0
             ||config.confirmationSessions()<1||config.cashArrivalSessions()<1) throw new IllegalArgumentException("回放范围或资金规则不正确");
-        if(!Set.of("V2","V1","BUY_HOLD","V2_WITHOUT_EVENTS").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
+        if(!Set.of("V2","BUY_HOLD").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
         if(config.buyFee()==null||config.buyFee().signum()<0||config.buyFee().compareTo(BigDecimal.ONE)>=0||config.redemptionFees().isEmpty())
             throw new IllegalArgumentException("费用配置不正确");
         int nextDay=0;
@@ -71,16 +71,12 @@ public class StrategyReplayEngine {
             for(var lot:lots) if(lot.available<=index) available=available.add(lot.shares);
             boolean held=shares.signum()>0;
             Input original=frame.input();
-            Input input=new Input(original.predictions(),original.trendRisk(),mode.equals("V2_WITHOUT_EVENTS")?List.of():original.facts(),
+            Input input=new Input(original.predictions(),original.trendRisk(),original.facts(),
                     original.missing(),held,original.preference(),original.defaultPreference(),original.holdingGainRate(),
                     original.currentDrawdown(),original.personalRule(),original.constraints());
             var decision=policy.decide(input);
             String action=decision.decision();
             if(mode.equals("BUY_HOLD")) action=index==0?"BUY":"HOLD";
-            if(mode.equals("V1")) {
-                var twenty=input.predictions().stream().filter(s->s.horizonId().equals("T20_V1")).findFirst().orElse(null);
-                action=twenty==null?null:twenty.direction().equals("UP")?(held?"HOLD":"BUY"):(held?"SELL":"AVOID");
-            }
             if("BUY".equals(action)||"ADD".equals(action)) {
                 boolean pendingBuy=false;for(var lot:lots) if(lot.available>index) pendingBuy=true;
                 BigDecimal ratio=mode.equals("BUY_HOLD")?BigDecimal.ONE:policy.positionRatio(action);
