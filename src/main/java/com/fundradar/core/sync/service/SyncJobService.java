@@ -15,6 +15,10 @@ public interface SyncJobService {
     /** 检查全部有效关注基金并生成本期一日预测，已有留档复用。 */
     SyncJobResponse startDirection1dPredictions();
 
+    /** 全部关注的多周期预测、综合建议及到期核验。 */
+    SyncJobResponse startMultiPredictions();
+    SyncJobResponse getLatestMultiPredictions();
+
     /** 只读同步中心最近预测任务的真实进度。 */
     SyncJobResponse getLatestDirection1dPredictions();
 

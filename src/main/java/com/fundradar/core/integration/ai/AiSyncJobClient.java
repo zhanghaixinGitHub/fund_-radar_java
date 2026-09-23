@@ -82,6 +82,28 @@ public class AiSyncJobClient {
         } catch(RuntimeException error) { throw unavailable(error); }
     }
 
+    public AiSyncJobStatus startMultiPredictions() {
+        try {
+            var payload=restClient.post().uri("/internal/v1/funds/sync-jobs/multi-predictions")
+                    .header(SERVICE_TOKEN_HEADER,properties.getToken()).header(TRACE_ID_HEADER,TraceContext.getTraceId())
+                    .retrieve().body(AiSyncJobStatus.class);
+            if(payload==null) throw new AiServiceUnavailableException("empty prediction sync job",null);
+            return payload;
+        } catch(RestClientResponseException error) {
+            if(error.getStatusCode().value()==409) throw new MarketNavSyncInProgressException("sync in progress",error);
+            throw unavailable(error);
+        } catch(AiServiceUnavailableException | MarketNavSyncInProgressException error) { throw error;
+        } catch(RuntimeException error) { throw unavailable(error); }
+    }
+
+    public AiSyncJobStatus getLatestMultiPredictions() {
+        try {
+            return restClient.get().uri("/internal/v1/funds/sync-jobs/multi-predictions/latest")
+                    .header(SERVICE_TOKEN_HEADER,properties.getToken()).header(TRACE_ID_HEADER,TraceContext.getTraceId())
+                    .retrieve().body(AiSyncJobStatus.class);
+        } catch(RuntimeException error) { throw unavailable(error); }
+    }
+
     /** 查询当前进程最近批次，首次使用或 Python 重启后可为空。 */
     public AiSyncJobStatus getLatestAll() {
         try {

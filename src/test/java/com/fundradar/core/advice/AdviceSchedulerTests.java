@@ -15,7 +15,7 @@ import static org.mockito.ArgumentMatchers.*;
 class AdviceSchedulerTests {
     @Test void shares_public_inference_across_users_and_reviews_cleared_history() {
         var positions=mock(SimulationRepository.class); var market=mock(SimulationMarketClient.class);
-        var predictions=mock(AiPredictionClient.class); var service=mock(AdviceService.class);
+        var predictions=mock(AiPredictionClient.class); var service=mock(DecisionServiceV2.class);
         var repo=mock(AdviceRepository.class); var outcomes=mock(AdviceOutcomeClient.class);
         var diagnoses=mock(DiagnosisClient.class); var diagnosisService=mock(DiagnosisService.class);
         var draftStats=mock(DraftStatsClient.class); var ruleService=mock(RuleService.class);
@@ -45,15 +45,15 @@ class AdviceSchedulerTests {
         verify(draftStats,times(1)).read("006730");
         verify(ruleService).refreshDraft(eq(one),eq("006730"),eq(stats),eq(clock.instant()));
         verify(ruleService).refreshDraft(eq(two),eq("006730"),eq(stats),eq(clock.instant()));
-        verify(predictions,times(1)).readExperiment("006730");
-        verify(service).archive(eq(one),eq(position),eq(input),any(),eq(clock.instant()));
-        verify(service).archive(eq(two),eq(position),eq(input),any(),eq(clock.instant()));
+        verifyNoInteractions(predictions);
+        verify(service).generateFor(eq(one),eq("006730"),eq(false));
+        verify(service).generateFor(eq(two),eq("006730"),eq(false));
         verify(repo).review(pending,result);
         verify(positions).job(eq("portfolio-advice"),eq("SUCCEEDED"),anyString(),eq(clock.instant()),eq(true));
     }
     @Test void single_fund_failure_marks_partial_and_keeps_other_reports() {
         var positions=mock(SimulationRepository.class); var market=mock(SimulationMarketClient.class);
-        var predictions=mock(AiPredictionClient.class); var service=mock(AdviceService.class);
+        var predictions=mock(AiPredictionClient.class); var service=mock(DecisionServiceV2.class);
         var repo=mock(AdviceRepository.class); var outcomes=mock(AdviceOutcomeClient.class);
         var diagnoses=mock(DiagnosisClient.class); var diagnosisService=mock(DiagnosisService.class);
         var draftStats=mock(DraftStatsClient.class); var ruleService=mock(RuleService.class);
@@ -74,8 +74,8 @@ class AdviceSchedulerTests {
         verify(diagnosisService).archive(eq(user),eq(broken),isNull(),any());
         verify(diagnosisService).archive(eq(user),eq(healthy),isNull(),any());
         verify(ruleService,never()).refreshDraft(any(),any(),any(),any());
-        verify(service).archive(eq(user),eq(broken),any(),any(),any());
-        verify(service).archive(eq(user),eq(healthy),any(),any(),any());
+        verify(service).generateFor(eq(user),eq("001632"),eq(false));
+        verify(service).generateFor(eq(user),eq("006730"),eq(false));
         verify(positions).job(eq("portfolio-advice"),eq("PARTIAL"),anyString(),eq(clock.instant()),eq(true));
     }
 }

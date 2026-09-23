@@ -31,7 +31,12 @@ public class SimulationMarketClient {
             var result = get("/internal/v1/simulation/calendar").retrieve().body(CalendarData.class);
             if (result == null) throw unavailable();
             return result;
-        } catch (RuntimeException error) { LOGGER.warn("SimulationMarketClient.calendar   >>> public calendar unavailable",error); throw unavailable(); }
+        } catch (RuntimeException error) {
+            var failure=com.fundradar.core.integration.ai.PublicDataFailure.classify(error,"CALENDAR",TraceContext.getTraceId());
+            LOGGER.warn("SimulationMarketClient.calendar   >>> traceId={}, code={}, calendar request failed",
+                    failure.traceId(),failure.code(),error);
+            throw new SimulationException(failure.code(),failure.summary()+" 请求号："+failure.traceId());
+        }
     }
     public Market market(String code, LocalDate start, LocalDate end) {
         try {

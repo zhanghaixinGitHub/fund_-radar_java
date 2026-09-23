@@ -20,6 +20,8 @@ public class AiServiceProperties {
     private Duration connectTimeout = Duration.ofSeconds(2);
     /** 等待 Python 返回读模型的最长时间。 */
     private Duration readTimeout = Duration.ofSeconds(3);
+    /** 多周期快照和有界历史回放的读取上限；独立于普通资料查询，默认30秒。 */
+    private Duration multiPredictionReadTimeout = Duration.ofSeconds(30);
 
     /** 返回 Python AI 内部服务基础地址。 */
     public String getBaseUrl() {
@@ -59,6 +61,14 @@ public class AiServiceProperties {
     /** 由配置绑定设置内部 HTTP 读取超时。 */
     public void setReadTimeout(Duration readTimeout) {
         this.readTimeout = readTimeout;
+    }
+
+    public Duration getMultiPredictionReadTimeout() {
+        return multiPredictionReadTimeout;
+    }
+
+    public void setMultiPredictionReadTimeout(Duration multiPredictionReadTimeout) {
+        this.multiPredictionReadTimeout = multiPredictionReadTimeout;
     }
 
 }

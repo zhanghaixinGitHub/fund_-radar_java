@@ -365,10 +365,12 @@ class SimulationIntegrationTests {
         equal("0.012",row.rate()); assertEquals(2,row.version());
     }
     @Test void pageRulesFiltersAndCounts() {
+        // 开发库已有公共费率可保留；只核对本事务增加的两条，不依赖全表为空。
+        long before=repo.pageRules(null,1,10).totalCount();
         insertPurchaseRule("000001","0.015"); insertPurchaseRule("000002","0.01");
         var page=repo.pageRules("000001",1,10);
         assertEquals(1,page.totalCount()); assertEquals("000001",page.items().get(0).fundCode());
-        assertEquals(2,repo.pageRules(null,1,10).totalCount());
+        assertEquals(before+2,repo.pageRules(null,1,10).totalCount());
     }
     @Test void refreshFundFetchesProfileAndPersistsRules() {
         var profile=feeProfile("0.0015",List.of(new FeeBand(0,6,num("0.015")),new FeeBand(7,null,num("0.005"))));

@@ -44,6 +44,17 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startMultiPredictions() {
+        return toResponse(aiSyncJobClient.startMultiPredictions());
+    }
+
+    @Override
+    public SyncJobResponse getLatestMultiPredictions() {
+        var source=aiSyncJobClient.getLatestMultiPredictions();
+        return source==null ? null : toResponse(source);
+    }
+
+    @Override
     public SyncJobResponse getLatestAll() {
         AiSyncJobStatus source = aiSyncJobClient.getLatestAll();
         return source == null ? null : toResponse(source);

@@ -21,7 +21,7 @@ public class AdviceScheduler {
     private final SimulationRepository positions;
     private final SimulationMarketClient market;
     private final AiPredictionClient predictions;
-    private final AdviceService service;
+    private final DecisionServiceV2 service;
     private final AdviceRepository repo;
     private final AdviceOutcomeClient outcomes;
     private final DiagnosisClient diagnoses;
@@ -30,7 +30,7 @@ public class AdviceScheduler {
     private final RuleService ruleService;
     private final Clock clock;
     public AdviceScheduler(DataSource dataSource,SimulationRepository positions,SimulationMarketClient market,
-                           AiPredictionClient predictions,AdviceService service,AdviceRepository repo,AdviceOutcomeClient outcomes,
+                           AiPredictionClient predictions,DecisionServiceV2 service,AdviceRepository repo,AdviceOutcomeClient outcomes,
                            DiagnosisClient diagnoses,DiagnosisService diagnosisService,
                            DraftStatsClient draftStats,RuleService ruleService,Clock clock) {
         this.dataSource=dataSource; this.positions=positions; this.market=market; this.predictions=predictions;
@@ -38,7 +38,7 @@ public class AdviceScheduler {
         this.diagnoses=diagnoses; this.diagnosisService=diagnosisService;
         this.draftStats=draftStats; this.ruleService=ruleService; this.clock=clock;
     }
-    @Scheduled(scheduler="adviceTaskScheduler",fixedDelayString="${portfolio.advice.fixed-delay:PT30M}",initialDelayString="${portfolio.advice.initial-delay:PT20S}")
+    // 由统一多周期流水线在公共预测保存后调用，移除旧独立调度，避免重复生成。
     public void tick() {
         var now=clock.instant().atZone(SimulationCalendar.ZONE);
         if(now.toLocalTime().isBefore(LocalTime.of(8,30))) return;
@@ -67,7 +67,7 @@ public class AdviceScheduler {
             for(UUID user:users) {
                 for(var position:positions.positions(user)) {
                     // 清仓后停止生成新诊断与新建议，但旧记录的到期核验不依赖当前持仓。
-                    if(position.shares().signum()==0 && position.totalSell().signum()>0) continue;
+                    // 清仓后仍由V2给出BUY/AVOID；诊断和草案只对当前有仓位运行。
                     if(position.shares().signum()>0) {
                         try {
                             // 诊断事实按基金跨用户复用；来源失败时该基金当日记INSUFFICIENT，不补造。
@@ -81,9 +81,7 @@ public class AdviceScheduler {
                         } catch(Exception error) { failed++; LOGGER.error("AdviceScheduler.run   >>>   fundCode={}, draft refresh failed",position.fundCode(),error); }
                     }
                     try {
-                        if(cache.size()>256) cache.clear();
-                        var prediction=position.shares().signum()>0 ? cache.computeIfAbsent(position.fundCode(),predictions::readExperiment) : null;
-                        service.archive(user,position,prediction,calendar,clock.instant()); saved++;
+                        service.generateFor(user,position.fundCode(),false); saved++;
                     } catch(Exception error) { failed++; LOGGER.error("AdviceScheduler.run   >>>   fundCode={}, archive failed",position.fundCode(),error); }
                 }
             }

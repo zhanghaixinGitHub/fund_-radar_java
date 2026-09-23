@@ -62,6 +62,20 @@ public class SyncJobController {
         return ApiResponse.success(syncJobService.getLatestDirection1dPredictions());
     }
 
+    /** 管理员手动检查全部有效关注基金；无需系统或个人实验开关。 */
+    @PostMapping("/multi-predictions")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startMultiPredictions() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startMultiPredictions()));
+    }
+
+    @GetMapping("/multi-predictions/latest")
+    public ApiResponse<SyncJobResponse> getLatestMultiPredictions() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestMultiPredictions());
+    }
+
     /** 费率同步与其他同步任务共用后台互斥；fundCode 为空表示原模拟范围全量初始化。 */
     @PostMapping("/simulation-fees")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startSimulationFees(@RequestParam(required=false) String fundCode) {
