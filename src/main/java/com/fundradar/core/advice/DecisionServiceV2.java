@@ -7,6 +7,7 @@ import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
 import com.fundradar.core.direction1d.Direction1dPolicy;
 import com.fundradar.core.prediction.MultiPredictionClient;
+import com.fundradar.core.prediction.PredictionDirectionContract;
 import com.fundradar.core.simulation.SimulationRepository;
 import com.fundradar.core.simulation.SimulationTypes;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -43,18 +44,18 @@ public class DecisionServiceV2 {
     public JsonNode generate(String code) { UUID user=user(true); owns(user,code); return generateFor(user,code,true); }
     public JsonNode latest(String code) {
         UUID user=user(false); owns(user,code);
-        return db.sql("SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c ORDER BY generated_at DESC LIMIT 1")
-                .param("u",user).param("c",code).query(String.class).optional().map(this::decode).orElse(null);
+        return db.sql("SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version=:v ORDER BY generated_at DESC LIMIT 1")
+                .param("u",user).param("c",code).param("v",VERSION).query(String.class).optional().map(this::decode).orElse(null);
     }
     /** 持仓总览一次读取本人各基金最新建议，避免每张卡片分别访问数据库和上游。 */
     public List<JsonNode> latestMine() {
         UUID owner=user(false);
-        return db.sql("SELECT DISTINCT ON(fund_code) payload::text FROM portfolio_decision_report WHERE user_id=:u ORDER BY fund_code,generated_at DESC LIMIT 500")
-                .param("u",owner).query(String.class).list().stream().map(this::decode).toList();
+        return db.sql("SELECT DISTINCT ON(fund_code) payload::text FROM portfolio_decision_report WHERE user_id=:u AND strategy_version=:v ORDER BY fund_code,generated_at DESC LIMIT 500")
+                .param("u",owner).param("v",VERSION).query(String.class).list().stream().map(this::decode).toList();
     }
     public List<JsonNode> history(String code,int page,String version) {
         UUID user=user(false); owns(user,code);
-        if(page<1||page>10000||!VERSION.equals(version)) throw new IllegalArgumentException("版本或页码不正确");
+        if(page<1||page>10000||!SUPPORTED_VERSIONS.contains(version)) throw new IllegalArgumentException("版本或页码不正确");
         return db.sql("""
           SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version=:v
           ORDER BY generated_at DESC,report_id LIMIT 20 OFFSET :offset
@@ -74,7 +75,10 @@ public class DecisionServiceV2 {
     }
     /** 核验结果附加读取，不回写报告原文；批量调用避免每份报告每个模型一次HTTP。 */
     public JsonNode outcomes(String code,int page) {
-        var records=history(code,page,VERSION);var ids=new LinkedHashSet<String>();
+        return outcomes(code,page,VERSION);
+    }
+    public JsonNode outcomes(String code,int page,String version) {
+        var records=history(code,page,version);var ids=new LinkedHashSet<String>();
         for(var report:records) for(var reference:report.path("modelRefs")) ids.add(reference.path("predictionId").asText());
         if(ids.isEmpty()) return json.createObjectNode();
         return predictions.post("/funds/"+code+"/outcomes",Map.of("predictionIds",ids));
@@ -113,6 +117,7 @@ public class DecisionServiceV2 {
             }
             current=predictions.get("/funds/"+code);
             for(var item:current.path("predictions")) {
+                PredictionDirectionContract.require(item);
                 // 过期预测不能充当今日输入；长周期未到期可继续用，始终保存原生成日与身份。
                 String end=item.path("endDate").asText("");
                 String resolved=current.path("targetResolutions").path(item.path("predictionId").asText()).path("endDate").asText("");
@@ -120,7 +125,8 @@ public class DecisionServiceV2 {
                 if(end.isBlank()) end=item.path("nominalEndDate").asText("");
                 if(!end.isBlank() && LocalDate.parse(end).isBefore(now.atZone(ZoneId.of("Asia/Shanghai")).toLocalDate())) continue;
                 signals.add(new Signal(item.path("predictionId").asText(),item.path("horizonId").asText(),item.path("direction").asText(),
-                        item.path("modelId").asText(),item.path("modelHash").asText(),item.path("activationRevision").asLong(),item.path("dataAsOf").asText()));
+                        item.path("modelId").asText(),item.path("modelHash").asText(),item.path("activationRevision").asLong(),item.path("dataAsOf").asText(),
+                        item.path("targetDefinitionId").asText(),item.path("directionPolicyHash").asText()));
                 var feature=item.path("featureSnapshot");
                 if(trend==null && feature.path("features").has("trendRiskFactor")) {
                     trend=feature.path("features").path("trendRiskFactor").asDouble();
@@ -162,6 +168,8 @@ public class DecisionServiceV2 {
                     drawdown,rule,constraints));
         } catch(MultiPredictionClient.PredictionServiceFailure error) {
             decision=policy.failed(error.detail().code(),error.detail().summary(),missing);
+        } catch(IllegalArgumentException error) {
+            decision=policy.failed("DIRECTION_POLICY_MISMATCH","预测或建议输入与当前策略规则不兼容",missing);
         }
         // 输入收齐后确定本次知识截止；不让报告时间早于本轮实际采用的预测和事实。
         now=clock.instant();

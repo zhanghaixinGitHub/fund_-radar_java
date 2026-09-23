@@ -50,7 +50,16 @@ class DecisionServiceV2IntegrationTests {
           "dataAsOf":"2026-09-21","featureSnapshot":{"features":{"trendRiskFactor":1,"currentDrawdown":-0.01},
           "facts":[],"missingOptionalFactors":["新闻未接入"]}}],"latestAttempts":[]}
           """));
+        var saved=(com.fasterxml.jackson.databind.node.ObjectNode)client.get("/funds/123456");
+        var signal=(com.fasterxml.jackson.databind.node.ObjectNode)saved.path("predictions").get(0);
+        identity(signal,"T20_V1");
         when(diagnoses.read(anyString(),any())).thenThrow(new IllegalStateException("fixture optional source unavailable"));
+    }
+    void identity(com.fasterxml.jackson.databind.node.ObjectNode signal,String horizon) {
+        signal.put("targetDefinitionId",com.fundradar.core.prediction.PredictionDirectionContract.TARGET);
+        signal.put("directionPolicyHash",com.fundradar.core.prediction.PredictionDirectionContract.HASH);
+        signal.set("directionPolicySnapshot",com.fundradar.core.prediction.PredictionDirectionContract.RULE);
+        signal.put("flatThreshold",com.fundradar.core.prediction.PredictionDirectionContract.RULE.path("thresholds").path(horizon).asText());
     }
     @AfterEach void clear() { CurrentUserContext.clear(); }
 
@@ -78,7 +87,7 @@ class DecisionServiceV2IntegrationTests {
         var next=(com.fasterxml.jackson.databind.node.ObjectNode)client.get("/funds/123456").deepCopy();
         var prediction=(com.fasterxml.jackson.databind.node.ObjectNode)next.path("predictions").get(0);
         prediction.put("predictionId","new-version-prediction");prediction.put("modelId","new-version-model");
-        prediction.put("direction","NON_UP");prediction.put("releaseId","new-release");
+        prediction.put("direction","DOWN");prediction.put("releaseId","new-release");
         when(client.get("/funds/123456")).thenReturn(next);
         when(clock.instant()).thenReturn(Instant.parse("2026-09-22T01:00:00Z"));
         var second=generate("10000");
@@ -118,7 +127,7 @@ class DecisionServiceV2IntegrationTests {
         for(String horizon:List.of("T5_V1","T20_V1","M6_V1")) {
             var prediction=base.deepCopy();String id=UUID.randomUUID().toString();expected.add(id);
             prediction.put("predictionId",id);prediction.put("horizonId",horizon);prediction.put("releaseId",release);
-            predictions.add(prediction);
+            identity(prediction,horizon);predictions.add(prediction);
         }
         when(client.get("/funds/123456")).thenReturn(current);
         var report=generate("0");
@@ -131,5 +140,22 @@ class DecisionServiceV2IntegrationTests {
         assertEquals(true,receipt.get("adviceReferenced"));
         assertFalse(receipt.containsKey("userId"));assertFalse(receipt.containsKey("positionSnapshot"));
         assertThrows(com.fundradar.core.auth.service.AccessDeniedException.class,()->automatic.cycles(null,null));
+    }
+    @Test void legacyHistoryAndOutcomeRouteRemainReadableButNotCurrent() throws Exception {
+        var report=generate("0");var id=UUID.randomUUID();var original=json.createObjectNode();
+        original.put("reportId",id.toString());original.put("strategyVersion",DecisionPolicyV2.LEGACY_VERSION);
+        original.put("decision","REDUCE");original.putArray("modelRefs").addObject().put("predictionId","old-binary");
+        db.sql("""
+          INSERT INTO portfolio_decision_report(report_id,user_id,fund_code,generated_at,strategy_version,
+            generation_status,decision,input_hash,content_hash,payload)
+          VALUES(:id,:u,'123456',clock_timestamp(),:v,'SUCCEEDED','REDUCE',:hash,:hash,CAST(:payload AS jsonb))
+          """).param("id",id).param("u",owner).param("v",DecisionPolicyV2.LEGACY_VERSION)
+                .param("hash","a".repeat(64)).param("payload",original.toString()).update();
+        assertEquals(original,service.history("123456",1,DecisionPolicyV2.LEGACY_VERSION).get(0));
+        assertEquals(report,service.latest("123456"));
+        service.outcomes("123456",1,DecisionPolicyV2.LEGACY_VERSION);
+        verify(client).post(eq("/funds/123456/outcomes"),eq(Map.of("predictionIds",Set.of("old-binary"))));
+        assertEquals("a".repeat(64),db.sql("SELECT content_hash FROM portfolio_decision_report WHERE report_id=:id")
+                .param("id",id).query(String.class).single());
     }
 }

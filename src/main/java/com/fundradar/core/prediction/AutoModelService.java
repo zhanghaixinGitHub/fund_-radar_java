@@ -35,7 +35,7 @@ public class AutoModelService {
         try {
             var digest=java.security.MessageDigest.getInstance("SHA-256");
             var types=new ArrayList<Class<?>>();
-            for(var root:List.of(StrategyReplayEngine.class,com.fundradar.core.advice.DecisionPolicyV2.class)) {
+            for(var root:List.of(StrategyReplayEngine.class,com.fundradar.core.advice.DecisionPolicyV2.class,PredictionDirectionContract.class)) {
                 types.add(root);types.addAll(Arrays.asList(root.getDeclaredClasses()));
             }
             types.sort(Comparator.comparing(Class::getName));
@@ -44,7 +44,7 @@ public class AutoModelService {
                     if(stream==null) throw new IllegalStateException("账本实现不可读");
                     digest.update(stream.readAllBytes());
                 }
-            try(var policy=StrategyReplayEngine.class.getResourceAsStream("/prediction-policy-v1.json")) {
+            for(var resource:List.of("/prediction-policy-v1.json","/prediction-policy-v2.json")) try(var policy=StrategyReplayEngine.class.getResourceAsStream(resource)) {
                 if(policy==null) throw new IllegalStateException("决策配置不可读");
                 digest.update(policy.readAllBytes());
             }

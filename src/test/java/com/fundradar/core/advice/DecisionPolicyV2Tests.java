@@ -13,15 +13,38 @@ class DecisionPolicyV2Tests {
         return new Input(signals,trend,List.of(new Fact("经理","任职变更未推断方向","TUSHARE",0)),List.of("新闻未接入"),
                 held,preference,true,null,-.01,null,List.of());
     }
+    @Test void flatIsNeutralRetainsItsWeightAndDoesNotBuyOrReduce() {
+        var flat=List.of(signal("T5_V1","FLAT"),signal("T20_V1","FLAT"),signal("M6_V1","FLAT"));
+        var held=policy.decide(input(true,"BALANCED",flat,null));
+        assertEquals("HOLD",held.decision());assertEquals(0,held.score());
+        assertEquals(3,held.neutralEvidence().size());assertTrue(held.opposingEvidence().isEmpty());
+        assertEquals("AVOID",policy.decide(input(false,"BALANCED",flat,null)).decision());
+        var mixed=policy.decide(input(true,"BALANCED",List.of(signal("T5_V1","UP"),signal("T20_V1","FLAT")),null));
+        assertEquals(2,mixed.effectiveWeights().size());
+        assertEquals(.6*mixed.effectiveWeights().get("T5_V1"),mixed.score(),1e-12);
+        assertEquals("REDUCE",policy.decide(input(true,"BALANCED",flat,-1.0)).decision());
+        var value=input(true,"BALANCED",flat,null);
+        var constrained=new Input(flat,null,value.facts(),value.missing(),true,"BALANCED",false,.2,-.01,
+                new PersonalRule("r",10.0,5.0),List.of());
+        assertEquals("REDUCE",policy.decide(constrained).decision());
+    }
+    @Test void unknownAndLegacySignalsAreRejectedAndHashMatchesPython() {
+        for(String direction:List.of("NON_UP","UNKNOWN",""))
+            assertEquals("FAILED",policy.decide(input(true,"BALANCED",List.of(signal("T5_V1",direction)),null)).generationStatus());
+        var legacy=new Signal("p","T5_V1","UP","m","h",1,"2026-09-21","OLD","OLD");
+        assertEquals("FAILED",policy.decide(input(true,"BALANCED",List.of(legacy),null)).generationStatus());
+        assertEquals("82abb3ff890e193486f38a0ac23e54aac3aec2729006acacecee0d9dfff04e6a",
+                com.fundradar.core.prediction.PredictionDirectionContract.HASH);
+    }
     @Test void smallHoldingStillGetsSellAndZeroHoldingCanBuy() {
         // 金额不作为组件输入，十元与十万元在同一公共快照下得到相同动作。
-        var negative=input(true,"BALANCED",List.of(signal("T20_V1","NON_UP")),-1.0);
+        var negative=input(true,"BALANCED",List.of(signal("T20_V1","DOWN")),-1.0);
         assertEquals("SELL",policy.decide(negative).decision());
         assertEquals("BUY",policy.decide(input(false,"BALANCED",List.of(signal("T20_V1","UP")),1.0)).decision());
-        assertEquals("AVOID",policy.decide(input(false,"BALANCED",List.of(signal("T20_V1","NON_UP")),-1.0)).decision());
+        assertEquals("AVOID",policy.decide(input(false,"BALANCED",List.of(signal("T20_V1","DOWN")),-1.0)).decision());
     }
     @Test void preferenceChangesDecisionButNotPublicPredictions() {
-        var signals=List.of(signal("T5_V1","NON_UP"),signal("T20_V1","UP"),signal("M6_V1","UP"));
+        var signals=List.of(signal("T5_V1","DOWN"),signal("T20_V1","UP"),signal("M6_V1","UP"));
         assertEquals("REDUCE",policy.decide(input(true,"SHORT",signals,0.0)).decision());
         assertEquals("HOLD",policy.decide(input(true,"LONG",signals,0.0)).decision());
         assertEquals(signals,policy.decide(input(true,"LONG",signals,0.0)).modelRefs());

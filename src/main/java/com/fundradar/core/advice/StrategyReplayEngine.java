@@ -36,7 +36,9 @@ public class StrategyReplayEngine {
     }
     private record CashDue(BigDecimal amount,int available) {}
     /** 当时实际发出的动作和原文hash；版本切换只沿历史报告序列，不读取今天的路由。 */
-    public record IssuedDecision(String action,String contentHash) {}
+    public record IssuedDecision(String action,String contentHash,String strategyVersion) {
+        public IssuedDecision(String action,String contentHash) {this(action,contentHash,LEGACY_VERSION);}
+    }
 
     public Result run(List<Frame> frames,Config config,String mode) {
         return run(frames,config,mode,Map.of());
@@ -79,19 +81,25 @@ public class StrategyReplayEngine {
             Input input=new Input(original.predictions(),original.trendRisk(),original.facts(),
                     original.missing(),held,original.preference(),original.defaultPreference(),original.holdingGainRate(),
                     original.currentDrawdown(),original.personalRule(),original.constraints());
-            var decision=policy.decide(input);
-            String action=decision.decision();
+            // 已发出建议只执行原动作；不先调用当前三态校验重新解释旧二分类输入。
+            var decision=mode.equals("V2")?policy.decide(input):null;
+            String action=decision==null?null:decision.decision();
+            String executionVersion=VERSION;
             if(mode.equals("BUY_HOLD")) action=index==0?"BUY":"HOLD";
             if(mode.equals("ISSUED_ADVICE")) {
                 var saved=issued.get(frame.date());
                 action=saved==null?"NO_REPORT":saved.action();
+                if(saved!=null) {
+                    executionVersion=saved.strategyVersion();
+                    if(!SUPPORTED_VERSIONS.contains(executionVersion)) throw new IllegalArgumentException("原建议执行版本未支持");
+                }
                 if(saved==null) notes.add("缺少当时有效建议的日期不产生模拟成交；不补写为继续持有");
                 if(saved!=null&&!Set.of("BUY","AVOID","ADD","HOLD","REDUCE","SELL").contains(action))
                     throw new IllegalArgumentException("历史建议动作不正确");
             }
             if("BUY".equals(action)||"ADD".equals(action)) {
                 boolean pendingBuy=false;for(var lot:lots) if(lot.available>index) pendingBuy=true;
-                BigDecimal ratio=mode.equals("BUY_HOLD")?BigDecimal.ONE:policy.positionRatio(action);
+                BigDecimal ratio=mode.equals("BUY_HOLD")?BigDecimal.ONE:policy.positionRatio(action,executionVersion);
                 BigDecimal budget=pendingBuy?ZERO:cash.multiply(ratio,MC);
                 if(pendingBuy) notes.add("同向买入份额未确认，保留判断但不重复买入");
                 if(budget.compareTo(new BigDecimal("0.01"))>=0) {
@@ -104,7 +112,7 @@ public class StrategyReplayEngine {
             } else if("REDUCE".equals(action)||"SELL".equals(action)) {
                 if(frame.redemptionPaused()) notes.add("暂停赎回期间保留减仓/卖出信号，不创建成交");
                 else {
-                    BigDecimal wanted=available.multiply(policy.positionRatio(action),MC);
+                    BigDecimal wanted=available.multiply(policy.positionRatio(action,executionVersion),MC);
                     BigDecimal sold=ZERO,gross=ZERO,fee=ZERO;
                     for(var lot:lots) {
                         if(lot.available>index||wanted.signum()<=0) continue;
@@ -131,10 +139,12 @@ public class StrategyReplayEngine {
             if(shares.signum()>0) invested++; else empty++;
             curve.add(new Point(frame.date(),equity,cash,receivable,shares,action,
                     mode.equals("ISSUED_ADVICE")?(issued.containsKey(frame.date())?issued.get(frame.date()).contentHash():"NO_REPORT"):
-                    com.fundradar.core.direction1d.Direction1dPolicy.hash(decision.toString())));
+                    com.fundradar.core.direction1d.Direction1dPolicy.hash(decision==null?"BUY_HOLD_V1":decision.toString())));
         }
         BigDecimal end=curve.get(curve.size()-1).equity();
-        return new Result(config.version(),VERSION,mode,config.initialCash(),end,end.divide(config.initialCash(),MC).doubleValue()-1,
+        String actualVersion=mode.equals("ISSUED_ADVICE")?issued.values().stream().map(IssuedDecision::strategyVersion).distinct().sorted().collect(java.util.stream.Collectors.joining("+")):
+                mode.equals("BUY_HOLD")?"BUY_HOLD_V1":VERSION;
+        return new Result(config.version(),actualVersion,mode,config.initialCash(),end,end.divide(config.initialCash(),MC).doubleValue()-1,
                 drawdown,turnover.divide(config.initialCash(),MC).doubleValue(),trades.size(),fees,invested,empty,
                 List.copyOf(trades),List.copyOf(curve),config.assumption(),List.copyOf(notes),exitReviews(frames,trades));
     }

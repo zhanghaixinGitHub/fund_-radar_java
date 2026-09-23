@@ -32,8 +32,10 @@ class StrategyModelComparisonTests {
                 ObjectNode frame=original.deepCopy();var signals=((ObjectNode)frame.path("input")).putArray("predictions");
                 for(var ref:refs) signals.addObject().put("horizonId",ref.path("horizonId").asText())
                         .put("modelId",ref.path("modelId").asText()).put("modelHash",ref.path("modelHash").asText())
-                        .put("direction",key.equals("a")?"UP":"NON_UP").put("predictionId","prediction")
-                        .put("activationRevision",1).put("dataAsOf","2026-01-02");
+                        .put("direction",key.equals("a")?"UP":"DOWN").put("predictionId","prediction")
+                        .put("activationRevision",1).put("dataAsOf","2026-01-02")
+                        .put("targetDefinitionId",com.fundradar.core.prediction.PredictionDirectionContract.TARGET)
+                        .put("directionPolicyHash",com.fundradar.core.prediction.PredictionDirectionContract.HASH);
                 frames.add(frame);
             }
         }

@@ -13,7 +13,7 @@ class StrategyReplayEngineTests {
     final DecisionPolicyV2 policy=new DecisionPolicyV2(new ObjectMapper());
     final StrategyReplayEngine engine=new StrategyReplayEngine(policy);
     Frame frame(int day,boolean up,boolean paused,boolean dividend) {
-        var signal=new Signal("p"+day,"T20_V1",up?"UP":"NON_UP","m","h",1,"2024-01-01");
+        var signal=new Signal("p"+day,"T20_V1",up?"UP":"DOWN","m","h",1,"2024-01-01");
         return new Frame(LocalDate.of(2024,1,day),BigDecimal.ONE,dividend?new BigDecimal("0.1"):BigDecimal.ZERO,paused,
                 new Input(List.of(signal),up?1.0:-1.0,List.of(),List.of(),false,"BALANCED",true,null,0.0,null,List.of()));
     }
@@ -59,5 +59,19 @@ class StrategyReplayEngineTests {
         assertEquals(0,result.curve().get(3).receivable().signum());
         assertTrue(result.trades().stream().filter(t->"BUY".equals(t.action())).count()>=2);
         assertTrue(result.executionNotes().stream().anyMatch(n->n.contains("缺少当时有效建议")));
+    }
+    @Test void legacyIssuedActionsDoNotReclassifySignalsAndKeepExecutionVersion() {
+        var invalid=new Signal("old","T20_V1","NON_UP","old","old",1,"2024-01-01","OLD",null);
+        var input=new Input(List.of(invalid),null,List.of(),List.of(),false,"BALANCED",true,null,null,null,List.of());
+        var frames=List.of(new Frame(LocalDate.of(2024,1,2),BigDecimal.ONE,BigDecimal.ZERO,false,input),
+                new Frame(LocalDate.of(2024,1,3),BigDecimal.ONE,BigDecimal.ZERO,false,input));
+        var actions=Map.of(frames.get(0).date(),new IssuedDecision("BUY","old-hash",LEGACY_VERSION),
+                frames.get(1).date(),new IssuedDecision("HOLD","new-hash",VERSION));
+        var actual=engine.run(frames,defaultConfig(),"ISSUED_ADVICE",actions);
+        assertEquals("BUY",actual.curve().get(0).action());assertEquals("HOLD",actual.curve().get(1).action());
+        assertTrue(actual.strategyVersion().contains(LEGACY_VERSION));assertTrue(actual.strategyVersion().contains(VERSION));
+        assertEquals("BUY_HOLD_V1",engine.run(frames,defaultConfig(),"BUY_HOLD").strategyVersion());
+        assertThrows(IllegalArgumentException.class,()->engine.run(frames,defaultConfig(),"ISSUED_ADVICE",
+                Map.of(frames.get(0).date(),new IssuedDecision("BUY","unknown","UNKNOWN"))));
     }
 }

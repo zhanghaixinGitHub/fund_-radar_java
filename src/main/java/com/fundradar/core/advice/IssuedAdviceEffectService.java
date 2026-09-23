@@ -45,17 +45,18 @@ public class IssuedAdviceEffectService {
             for(var row:records) {
                 var report=json.readTree(row.get("payload").toString());
                 if(!"SUCCEEDED".equals(report.path("generationStatus").asText())) {failed++;continue;}
-                if(!DecisionPolicyV2.VERSION.equals(report.path("strategyVersion").asText()))
+                if(!DecisionPolicyV2.SUPPORTED_VERSIONS.contains(report.path("strategyVersion").asText()))
                     throw new IllegalArgumentException("该历史建议的策略版本尚无兼容账本，不能用当前策略代替");
                 var issued=Instant.parse(report.path("generatedAt").asText()).atZone(ZoneId.of("Asia/Shanghai"));
                 var validUntil=Instant.parse(report.path("validUntil").asText());
                 LocalDate first=issued.toLocalTime().isBefore(LocalTime.of(15,0))?issued.toLocalDate():issued.toLocalDate().plusDays(1);
                 var day=frames.stream().map(StrategyReplayEngine.Frame::date).filter(d->!d.isBefore(first)).findFirst().orElse(null);
                 if(day==null||!day.atTime(15,0).atZone(ZoneId.of("Asia/Shanghai")).toInstant().isBefore(validUntil)) continue;
-                actions.put(day,new StrategyReplayEngine.IssuedDecision(report.path("decision").asText(),row.get("content_hash").toString()));
+                actions.put(day,new StrategyReplayEngine.IssuedDecision(report.path("decision").asText(),row.get("content_hash").toString(),report.path("strategyVersion").asText()));
                 var identity=json.createObjectNode();identity.put("reportId",report.path("reportId").asText());identity.put("executedOn",day.toString());
                 identity.put("generatedAt",issued.toInstant().toString());identity.put("reportHash",row.get("content_hash").toString());
                 identity.set("modelRefs",report.path("modelRefs"));identity.set("releaseIds",report.path("releaseIds"));
+                identity.put("strategyVersion",report.path("strategyVersion").asText());
                 sequence.put(day,identity);
             }
             result.put("failedReports",failed);result.put("missingReportDays",frames.size()-actions.size());

@@ -17,7 +17,8 @@ public class DecisionControllerV2 {
     @GetMapping("/funds/{code}/decision/history") public ApiResponse<?> history(@PathVariable String code,
       @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue=DecisionPolicyV2.VERSION) String version) { return ok(service.history(code,page,version)); }
     @GetMapping("/funds/{code}/decision/reports/{id}") public ApiResponse<?> report(@PathVariable String code,@PathVariable UUID id) { return ok(service.report(code,id)); }
-    @GetMapping("/funds/{code}/decision/outcomes") public ApiResponse<?> outcomes(@PathVariable String code,@RequestParam(defaultValue="1") int page) {return ok(service.outcomes(code,page));}
+    @GetMapping("/funds/{code}/decision/outcomes") public ApiResponse<?> outcomes(@PathVariable String code,@RequestParam(defaultValue="1") int page,
+      @RequestParam(defaultValue=DecisionPolicyV2.VERSION) String version) {return ok(service.outcomes(code,page,version));}
     @GetMapping("/strategy-preference") public ApiResponse<?> preference() { return ok(service.preference()); }
     @PostMapping("/strategy-preference") public ApiResponse<?> preference(@RequestBody Map<String,String> body) {
         if(!body.keySet().equals(Set.of("preference"))) throw new IllegalArgumentException();

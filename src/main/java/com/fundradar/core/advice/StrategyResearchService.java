@@ -91,7 +91,7 @@ public class StrategyResearchService {
                 for(var signal:frame.input().predictions()) {
                     var ref=refs.get(signal.horizonId());
                     if(ref==null || !seen.add(signal.horizonId())
-                            || !Set.of("UP","NON_UP").contains(signal.direction())
+                            || !com.fundradar.core.prediction.PredictionDirectionContract.valid(signal.direction(),signal.targetDefinitionId(),signal.directionPolicyHash())
                             || !ref.path("modelId").asText().equals(signal.modelId())
                             || !ref.path("modelHash").asText().equals(signal.modelHash())
                             || ref.path("activationRevision").asLong()!=signal.activationRevision())
