@@ -26,6 +26,8 @@ class DecisionServiceV2IntegrationTests {
     @Autowired DecisionServiceV2 service;
     @Autowired JdbcClient db;
     @Autowired ObjectMapper json;
+    @Autowired IssuedAdviceEffectService effects;
+    @Autowired com.fundradar.core.prediction.AutoModelService automatic;
     @MockitoBean MultiPredictionClient client;
     @MockitoBean SimulationRepository positions;
     @MockitoBean DiagnosisClient diagnoses;
@@ -68,5 +70,66 @@ class DecisionServiceV2IntegrationTests {
         assertEquals(cleared.path("reportId"),generate("0").path("reportId"));
         assertEquals(3,db.sql("SELECT count(*) FROM portfolio_decision_report WHERE user_id=:u").param("u",owner).query(Integer.class).single());
         assertEquals(small,service.report("123456",UUID.fromString(small.path("reportId").asText())));
+    }
+
+    @Test void issuedLedgerUsesSavedVersionSequenceAndOwnerBoundary() throws Exception {
+        when(clock.instant()).thenReturn(Instant.parse("2026-09-21T01:00:00Z"));
+        var first=generate("0");
+        var next=(com.fasterxml.jackson.databind.node.ObjectNode)client.get("/funds/123456").deepCopy();
+        var prediction=(com.fasterxml.jackson.databind.node.ObjectNode)next.path("predictions").get(0);
+        prediction.put("predictionId","new-version-prediction");prediction.put("modelId","new-version-model");
+        prediction.put("direction","NON_UP");prediction.put("releaseId","new-release");
+        when(client.get("/funds/123456")).thenReturn(next);
+        when(clock.instant()).thenReturn(Instant.parse("2026-09-22T01:00:00Z"));
+        var second=generate("10000");
+        var start=java.time.LocalDate.of(2026,9,18);var end=java.time.LocalDate.of(2026,9,22);
+        var input=json.createObjectNode();input.put("inputHash","fixture-market");var frames=input.putArray("frames");
+        for(int day:new int[]{18,21,22}) {
+            var facts=new DecisionPolicyV2.Input(List.of(),null,List.of(),List.of(),false,"BALANCED",true,null,null,null,List.of());
+            frames.add(json.valueToTree(new StrategyReplayEngine.Frame(java.time.LocalDate.of(2026,9,day),
+                    java.math.BigDecimal.ONE,java.math.BigDecimal.ZERO,false,facts)));
+        }
+        when(client.get("/funds/123456/ledger-inputs?start="+start+"&end="+end)).thenReturn(input);
+        var config=json.createObjectNode();config.set("executionPolicy",json.valueToTree(StrategyReplayEngine.defaultConfig()));
+        when(client.get("/auto/policy")).thenReturn(config);
+        var result=effects.read(new IssuedAdviceEffectService.Request("123456",start,end));
+        assertEquals("SUCCEEDED",result.path("status").asText());
+        assertEquals("2026-09-21",result.path("actualStartDate").asText());
+        assertEquals(2,result.path("reportSequence").size());
+        assertEquals(first.path("reportId"),result.path("reportSequence").get(0).path("reportId"));
+        assertEquals(second.path("reportId"),result.path("reportSequence").get(1).path("reportId"));
+        assertEquals(first.path("decision"),result.path("system").path("curve").get(0).path("action"));
+        assertEquals(second.path("decision"),result.path("system").path("curve").get(1).path("action"));
+        assertEquals(result.path("system").path("initialCash"),result.path("buyHold").path("initialCash"));
+        assertEquals(first,service.report("123456",UUID.fromString(first.path("reportId").asText())));
+        assertThrows(NoSuchElementException.class,()->effects.read(new IssuedAdviceEffectService.Request("999999",start,end)));
+        assertEquals(1,db.sql("SELECT count(*) FROM advice_effect_evidence WHERE user_id=:u").param("u",owner).query(Integer.class).single());
+    }
+
+    @Test void adoptionReceiptRequiresAllThreeActuallyReferencedPredictions() throws Exception {
+        String release=UUID.randomUUID().toString();
+        when(client.get("/auto/releases/pending")).thenReturn(json.readTree("[{\"release_id\":\""+release+"\"}]"));
+        automatic.confirmAdoption();
+        verify(client,never()).post(anyString(),any());
+        var current=(com.fasterxml.jackson.databind.node.ObjectNode)client.get("/funds/123456").deepCopy();
+        var base=(com.fasterxml.jackson.databind.node.ObjectNode)current.path("predictions").get(0).deepCopy();
+        var predictions=current.putArray("predictions");
+        var expected=new HashSet<String>();
+        for(String horizon:List.of("T5_V1","T20_V1","M6_V1")) {
+            var prediction=base.deepCopy();String id=UUID.randomUUID().toString();expected.add(id);
+            prediction.put("predictionId",id);prediction.put("horizonId",horizon);prediction.put("releaseId",release);
+            predictions.add(prediction);
+        }
+        when(client.get("/funds/123456")).thenReturn(current);
+        var report=generate("0");
+        assertEquals(3,report.path("modelRefs").size());
+        automatic.confirmAdoption();
+        var captured=org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(client).post(eq("/auto/releases/"+release+"/receipt"),captured.capture());
+        var receipt=(Map<?,?>)captured.getValue();
+        assertEquals(expected,new HashSet<>((List<?>)receipt.get("predictionIds")));
+        assertEquals(true,receipt.get("adviceReferenced"));
+        assertFalse(receipt.containsKey("userId"));assertFalse(receipt.containsKey("positionSnapshot"));
+        assertThrows(com.fundradar.core.auth.service.AccessDeniedException.class,()->automatic.cycles(null,null));
     }
 }

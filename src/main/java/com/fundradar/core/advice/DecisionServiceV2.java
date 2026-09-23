@@ -172,6 +172,13 @@ public class DecisionServiceV2 {
         payload.set("positionSnapshot",json.valueToTree(position));
         payload.put("positionSnapshotId",stableHash(json.valueToTree(position)));
         payload.set("predictionSnapshot",current==null?json.nullNode():current);
+        // 发布身份来自本次实际引用原文，不能用当前路由替旧预测补填。
+        var releases=new TreeSet<String>();
+        if(current!=null) for(var item:current.path("predictions")) {
+            if(signals.stream().anyMatch(signal->signal.predictionId().equals(item.path("predictionId").asText()))
+                    && !item.path("releaseId").isNull() && item.hasNonNull("releaseId")) releases.add(item.path("releaseId").asText());
+        }
+        payload.set("releaseIds",json.valueToTree(releases));
         payload.set("diagnosisSnapshot",diagnosisSnapshot==null?json.nullNode():diagnosisSnapshot);
         payload.set("personalRuleSnapshot",ruleSnapshot==null?json.nullNode():ruleSnapshot);
         payload.set("portfolioSnapshot",json.valueToTree(portfolio));

@@ -48,7 +48,12 @@ public class StrategyResearchService {
      * 模型只改变预测输入，资金、日期、费用和决策规则保持相同。
      * 完整核对每一天实际模型身份，防止候选名称下混入基础回退包，或少算失败日期得到虚高成绩。
      */
-    ObjectNode compareModels(JsonNode inputs) throws com.fasterxml.jackson.core.JsonProcessingException {
+    public ObjectNode compareModels(JsonNode inputs) throws com.fasterxml.jackson.core.JsonProcessingException {
+        return compareModels(inputs,StrategyReplayEngine.defaultConfig());
+    }
+
+    /** 自动周期由冻结协议提供费用，继续复用同一个成交账本，不按候选各自设置资金。 */
+    public ObjectNode compareModels(JsonNode inputs,StrategyReplayEngine.Config executionPolicy) throws com.fasterxml.jackson.core.JsonProcessingException {
         if(!"MODEL_BUNDLE_REPLAY_V1".equals(inputs.path("comparisonVersion").asText()))
             throw new IllegalArgumentException("模型比较输入版本未就绪，请更新预测服务");
         var frames=new ArrayList<StrategyReplayEngine.Frame>();
@@ -58,7 +63,7 @@ public class StrategyResearchService {
         ObjectNode result=json.createObjectNode();
         var comparisons=result.putObject("comparisons");
         var models=result.putObject("comparisonModels");
-        comparisons.set("BUY_HOLD",json.valueToTree(engine.run(frames,StrategyReplayEngine.defaultConfig(),"BUY_HOLD")));
+        comparisons.set("BUY_HOLD",json.valueToTree(engine.run(frames,executionPolicy,"BUY_HOLD")));
         models.putObject("BUY_HOLD").put("label","买入后一直持有").put("role","BENCHMARK");
         var ids=new HashSet<String>();
         for(var bundle:bundles) {
@@ -95,7 +100,7 @@ public class StrategyResearchService {
                 if(!seen.equals(refs.keySet())) throw new IllegalArgumentException("该日多周期预测不完整");
                 modelFrames.add(frame);
             }
-            comparisons.set(id,json.valueToTree(engine.run(modelFrames,StrategyReplayEngine.defaultConfig(),"V2")));
+            comparisons.set(id,json.valueToTree(engine.run(modelFrames,executionPolicy,"V2")));
             var metadata=bundle.deepCopy();((ObjectNode)metadata).remove("frames");models.set(id,metadata);
         }
         result.set("inputSnapshot",inputs);result.set("excludedModels",inputs.path("excludedModels"));

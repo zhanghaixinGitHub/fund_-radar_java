@@ -19,9 +19,10 @@ public class MultiPredictionPipeline {
     private final MultiPredictionClient client; private final MultiPredictionService service;
     private final Direction1dBatchService scope; private final JdbcClient db; private final DataSource datasource;
     private final ObjectProvider<AdviceScheduler> advice;
+    private final ObjectProvider<AutoModelService> automatic;
     public MultiPredictionPipeline(MultiPredictionClient client,MultiPredictionService service,Direction1dBatchService scope,
-                                   JdbcClient db,DataSource datasource,ObjectProvider<AdviceScheduler> advice) {
-        this.client=client;this.service=service;this.scope=scope;this.db=db;this.datasource=datasource;this.advice=advice;
+                                   JdbcClient db,DataSource datasource,ObjectProvider<AdviceScheduler> advice,ObjectProvider<AutoModelService> automatic) {
+        this.client=client;this.service=service;this.scope=scope;this.db=db;this.datasource=datasource;this.advice=advice;this.automatic=automatic;
     }
     @Scheduled(scheduler="adviceTaskScheduler",fixedDelayString="${prediction.multi.fixed-delay:PT30M}",
             initialDelayString="${prediction.multi.initial-delay:PT40S}")
@@ -32,6 +33,7 @@ public class MultiPredictionPipeline {
             }
             try {
                 client.post("/maintenance",Map.of());
+                var improvement=automatic.getIfAvailable();if(improvement!=null) improvement.check("MAINTENANCE");
                 String after="";int funds=0,items=0,failed=0;
                 while(true) {
                     var codes=scope.fundCodes(after); if(codes.isEmpty()) break;
@@ -46,6 +48,7 @@ public class MultiPredictionPipeline {
                     after=codes.get(codes.size()-1);
                 }
                 var worker=advice.getIfAvailable();if(worker!=null) worker.tick();
+                if(improvement!=null) {improvement.dispatch();improvement.confirmAdoption();}
                 client.post("/maintenance",Map.of());
                 LOG.info("MultiPredictionPipeline.tick   >>> funds={}, items={}, failedItems={}",funds,items,failed);
             } finally { try(var statement=connection.prepareStatement("SELECT pg_advisory_unlock(721109,1)")) {statement.execute();} }
@@ -70,6 +73,7 @@ public class MultiPredictionPipeline {
             }
         }
         if(generateAdvice) {var worker=advice.getIfAvailable();if(worker!=null) worker.tick();}
+        if(generateAdvice) {var improvement=automatic.getIfAvailable();if(improvement!=null) improvement.check("SYNC_COMPLETED");}
         return Map.of("taskId",taskId,"fundCount",codes.size(),"linkedScopes",linked,"failed",failed);
     }
 }

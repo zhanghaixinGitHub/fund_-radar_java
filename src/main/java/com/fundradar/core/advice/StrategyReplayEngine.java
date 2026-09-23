@@ -35,11 +35,16 @@ public class StrategyReplayEngine {
         Lot(BigDecimal shares,LocalDate bought,int available) {this.shares=shares;this.bought=bought;this.available=available;}
     }
     private record CashDue(BigDecimal amount,int available) {}
+    /** 当时实际发出的动作和原文hash；版本切换只沿历史报告序列，不读取今天的路由。 */
+    public record IssuedDecision(String action,String contentHash) {}
 
     public Result run(List<Frame> frames,Config config,String mode) {
+        return run(frames,config,mode,Map.of());
+    }
+    public Result run(List<Frame> frames,Config config,String mode,Map<LocalDate,IssuedDecision> issued) {
         if(frames.isEmpty()||frames.size()>3000||config.initialCash().signum()<=0
             ||config.confirmationSessions()<1||config.cashArrivalSessions()<1) throw new IllegalArgumentException("回放范围或资金规则不正确");
-        if(!Set.of("V2","BUY_HOLD").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
+        if(!Set.of("V2","BUY_HOLD","ISSUED_ADVICE").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
         if(config.buyFee()==null||config.buyFee().signum()<0||config.buyFee().compareTo(BigDecimal.ONE)>=0||config.redemptionFees().isEmpty())
             throw new IllegalArgumentException("费用配置不正确");
         int nextDay=0;
@@ -77,6 +82,13 @@ public class StrategyReplayEngine {
             var decision=policy.decide(input);
             String action=decision.decision();
             if(mode.equals("BUY_HOLD")) action=index==0?"BUY":"HOLD";
+            if(mode.equals("ISSUED_ADVICE")) {
+                var saved=issued.get(frame.date());
+                action=saved==null?"NO_REPORT":saved.action();
+                if(saved==null) notes.add("缺少当时有效建议的日期不产生模拟成交；不补写为继续持有");
+                if(saved!=null&&!Set.of("BUY","AVOID","ADD","HOLD","REDUCE","SELL").contains(action))
+                    throw new IllegalArgumentException("历史建议动作不正确");
+            }
             if("BUY".equals(action)||"ADD".equals(action)) {
                 boolean pendingBuy=false;for(var lot:lots) if(lot.available>index) pendingBuy=true;
                 BigDecimal ratio=mode.equals("BUY_HOLD")?BigDecimal.ONE:policy.positionRatio(action);
@@ -118,6 +130,7 @@ public class StrategyReplayEngine {
             peak=peak.max(equity); drawdown=Math.max(drawdown,1-equity.divide(peak,MC).doubleValue());
             if(shares.signum()>0) invested++; else empty++;
             curve.add(new Point(frame.date(),equity,cash,receivable,shares,action,
+                    mode.equals("ISSUED_ADVICE")?(issued.containsKey(frame.date())?issued.get(frame.date()).contentHash():"NO_REPORT"):
                     com.fundradar.core.direction1d.Direction1dPolicy.hash(decision.toString())));
         }
         BigDecimal end=curve.get(curve.size()-1).equity();

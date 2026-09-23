@@ -44,4 +44,20 @@ class StrategyReplayEngineTests {
         assertEquals(expected.decision(),result.curve().get(0).action());
         assertEquals(com.fundradar.core.direction1d.Direction1dPolicy.hash(expected.toString()),result.curve().get(0).decisionHash());
     }
+    @Test void issuedAdviceUsesOriginalActionsAndHashesAcrossVersions() {
+        var frames=List.of(frame(2,false,false,false),frame(3,true,false,false),frame(4,true,false,false),frame(5,true,false,true),frame(8,true,false,false));
+        var issued=Map.of(LocalDate.of(2024,1,2),new IssuedDecision("BUY","release-old-report"),
+                LocalDate.of(2024,1,3),new IssuedDecision("SELL","release-new-report"),
+                LocalDate.of(2024,1,5),new IssuedDecision("BUY","release-new-next-report"));
+        var result=engine.run(frames,defaultConfig(),"ISSUED_ADVICE",issued);
+        assertEquals("BUY",result.curve().get(0).action()); // 当天重新计算会卖出，仍执行原建议。
+        assertEquals("release-old-report",result.curve().get(0).decisionHash());
+        assertEquals("SELL",result.curve().get(1).action());
+        assertEquals("NO_REPORT",result.curve().get(2).action());
+        assertEquals("NO_REPORT",result.curve().get(2).decisionHash());
+        assertTrue(result.curve().get(2).receivable().signum()>0);
+        assertEquals(0,result.curve().get(3).receivable().signum());
+        assertTrue(result.trades().stream().filter(t->"BUY".equals(t.action())).count()>=2);
+        assertTrue(result.executionNotes().stream().anyMatch(n->n.contains("缺少当时有效建议")));
+    }
 }
