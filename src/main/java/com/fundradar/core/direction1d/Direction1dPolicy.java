@@ -10,6 +10,9 @@ import java.util.*;
 /** 跨服务契约校验；Python成功不自动等于Java已提前留档。 */
 public final class Direction1dPolicy {
     public static final String PROTOCOL="DIRECTION_1D_V1";
+    public static final String ACTIVE_PROTOCOL="DIRECTION_1D_V2";
+    public static final String THREE_STATE_TARGET="UNIT_NAV_DIRECTION_THREE_STATE_V2";
+    public static final String THREE_STATE_POLICY="EXACT_UNIT_NAV_CHANGE_V1";
     public static final String ACTIVATION_POLICY="AVAILABLE_AT_PREDICTION_V2";
     public static final ZoneId ZONE=ZoneId.of("Asia/Shanghai");
     private Direction1dPolicy() {}
@@ -22,8 +25,11 @@ public final class Direction1dPolicy {
         try {
             if(raw.length()>150_000 || !hash(raw).equals(hash)) throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
             JsonNode p=json.readTree(raw);
-            if(!PROTOCOL.equals(p.path("protocol").asText()) || p.path("horizon_trading_days").asInt()!=1
-                    || !"UNIT_NAV_DIRECTION_V1".equals(p.path("target_definition").asText())
+            boolean ternary=ACTIVE_PROTOCOL.equals(p.path("protocol").asText());
+            if((!ternary&&!PROTOCOL.equals(p.path("protocol").asText())) || p.path("horizon_trading_days").asInt()!=1
+                    || !(ternary?THREE_STATE_TARGET:"UNIT_NAV_DIRECTION_V1").equals(p.path("target_definition").asText())
+                    || (ternary&&(!"DIRECTION_1D_EXPERIMENT_V2".equals(p.path("schema_version").asText())
+                        || !THREE_STATE_POLICY.equals(p.path("direction_policy").asText())))
                     || !"FORWARD_ORIGINAL".equals(p.path("kind").asText()) || p.path("model_released").asBoolean(true)
                     || !p.has("up_probability") || !p.get("up_probability").isNull()
                     || !expectedCode.equals(p.path("fund_code").asText())) throw new IllegalArgumentException("PROTOCOL_MISMATCH");
@@ -63,7 +69,7 @@ public final class Direction1dPolicy {
                 if("AVAILABLE".equals(b.path("status").asText())) {
                     double s=b.path("score").asDouble(Double.NaN);
                     if(!Double.isFinite(s)||s<0||s>1 || !b.path("model_hash").asText().matches("[a-f0-9]{64}")
-                            || !b.path("predicted_direction").asText().equals(s>.5?"UP":"NON_UP")
+                            || !b.path("predicted_direction").asText().equals(ternary?threeStateWinner(b):s>.5?"UP":"NON_UP")
                             || !instant(b,"trained_at").isBefore(generated)) throw new IllegalArgumentException("INVALID_MODEL");
                     // 新模型可在窗口内真实完成后使用；旧档继续按原策略核验，不篡改旧结论。
                     if(ACTIVATION_POLICY.equals(activation)) {
@@ -92,7 +98,7 @@ public final class Direction1dPolicy {
             if(!p.path("task_key").equals(original.path("task_key"))
                     || !p.path("input_snapshot_id").equals(original.path("input_snapshot_id"))
                     || !p.path("target_nav_date").equals(original.path("target_nav_date"))
-                    || !"UNIT_NAV_DIRECTION_V1".equals(p.path("target_definition").asText())
+                    || !p.path("target_definition").equals(original.path("target_definition"))
                     || !"FORWARD_ORIGINAL".equals(p.path("kind").asText())
                     || !"AVAILABLE".equals(p.path("status").asText())
                     || LocalDate.parse(p.path("target_nav_date").asText()).isAfter(now.atZone(ZONE).toLocalDate()))
@@ -124,6 +130,21 @@ public final class Direction1dPolicy {
                 throw new IllegalArgumentException("INVALID_LABEL");
         } catch(IllegalArgumentException e){throw e;}
         catch(Exception e){throw new IllegalArgumentException("INVALID_LABEL",e);}
+    }
+    /** 三类分数只用于核对原文；并列优先持平，再上涨、下跌，不向用户展示为概率。 */
+    static String threeStateWinner(JsonNode branch) {
+        JsonNode scores=branch.path("class_scores");
+        if(!scores.isObject()||scores.size()!=3)throw new IllegalArgumentException("INVALID_CLASS_SCORES");
+        String winner=null; double best=-1,total=0;
+        for(String label:List.of("FLAT","UP","DOWN")) {
+            double value=scores.path(label).asDouble(Double.NaN);
+            if(!scores.path(label).isNumber()||!Double.isFinite(value)||value<0||value>1)
+                throw new IllegalArgumentException("INVALID_CLASS_SCORES");
+            total+=value;if(value>best){best=value;winner=label;}
+        }
+        if(Math.abs(total-1)>1e-12||Math.abs(best-branch.path("score").asDouble(Double.NaN))>1e-12)
+            throw new IllegalArgumentException("INVALID_CLASS_SCORES");
+        return winner;
     }
     /** 浏览器camelCase视图；原始snake_case JSON另外原样保存，不参与重新序列化验hash。 */
     public static Object view(JsonNode n) {

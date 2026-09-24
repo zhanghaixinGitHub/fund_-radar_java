@@ -48,7 +48,17 @@ public class Direction1dService {
         var coverage=client.coverage(List.of(code)); var result=new LinkedHashMap<String,Object>();
         result.put("coverage",Direction1dPolicy.view(coverage.path("items").get(0)));
         result.put("window",Direction1dPolicy.view(coverage.path("window")));
-        result.put("history",repo.history(user,code,LocalDate.of(2021,1,1),LocalDate.of(2026,12,31),1,1));
+        result.put("history",repo.currentHistory(user,code));
+        return result;
+    }
+    /** 按原预测读取可核对的指标作用；基金、本人权限与两端原文字节必须一致。 */
+    public JsonNode evidence(String code,UUID forecastId) {
+        UUID user=user(false); requireFund(user,code);
+        var source=repo.evidenceSource(user,code,forecastId);
+        var result=client.get("/forecast-jobs/"+source.get("source_job_id")+"/evidence");
+        if(!code.equals(result.path("fundCode").asText())
+                || !source.get("content_hash").equals(result.path("contentHash").asText()))
+            throw new IllegalStateException("预测依据与原记录不一致");
         return result;
     }
     public Map<String,Object> generate(String code) {
@@ -125,7 +135,7 @@ public class Direction1dService {
     public Map<String,Object> history(String code,LocalDate start,LocalDate end,int page,int size,LocalDate beforeDate,UUID beforeId,String branch,String assessment) {
         validatePage(page,size);
         if(start.isAfter(end) || (beforeDate==null)!=(beforeId==null)
-                || !Set.of("","FIXED","WEEKLY","ALWAYS_UP","ALWAYS_NON_UP","INITIAL_MAJORITY","MOMENTUM").contains(branch)
+                || !Set.of("","FIXED","WEEKLY","ALWAYS_UP","ALWAYS_NON_UP","ALWAYS_FLAT","ALWAYS_DOWN","INITIAL_MAJORITY","MOMENTUM").contains(branch)
                 || !Set.of("","ASSESSED","PENDING").contains(assessment)) throw new IllegalArgumentException("INVALID_RANGE");
         return repo.history(user(false),code,start,end,page,size,beforeDate,beforeId,branch,assessment);
     }

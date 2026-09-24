@@ -19,7 +19,9 @@ public class Direction1dStatistics {
         if(start.isAfter(end))throw new IllegalArgumentException("INVALID_RANGE");
         String rows="""
           WITH raw AS (
-            SELECT f.forecast_id,f.fund_code,f.target_nav_date,s.branch_id,s.model_id,s.predicted_direction,
+            SELECT f.protocol,f.forecast_id,f.fund_code,f.target_nav_date,s.branch_id,s.model_id,s.predicted_direction,
+              CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
+                ELSE (s.predicted_direction='UP')=(o.y=1) END AS correct,
               f.payload->>'group_id' AS group_id,f.payload->>'product_family_id' AS family,
               COALESCE(o.payload->>'event_status',f.payload->'input'->>'event_status') AS event_status,o.y,o.actual_direction,
               r.status='VERIFIED' AND s.status='AVAILABLE' AND o.y IS NOT NULL
@@ -27,7 +29,7 @@ public class Direction1dStatistics {
                 AND COALESCE((f.payload->>'expires_at')::timestamptz,'infinity'::timestamptz)>clock_timestamp() AS valid,
               s.status='AVAILABLE' AS available,
               count(*) FILTER(WHERE r.status='VERIFIED' AND s.status='AVAILABLE' AND o.y IS NOT NULL)
-                OVER(PARTITION BY s.branch_id,f.target_nav_date,f.payload->>'product_family_id') AS family_shares
+                OVER(PARTITION BY f.protocol,s.branch_id,f.target_nav_date,f.payload->>'product_family_id') AS family_shares
             FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
             JOIN direction_1d_forecast_score s USING(forecast_id)
             LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
@@ -39,20 +41,26 @@ public class Direction1dStatistics {
               ('MONTH',to_char(target_nav_date,'YYYY-MM')),('MODEL',COALESCE(model_id::text,'BASELINE')),
               ('EVENT',COALESCE(event_status,'UNKNOWN'))) dimension(kind,key)
           )
-          SELECT kind,key,branch_id,count(*) FILTER(WHERE valid) AS assessed_count,
-            count(*) FILTER(WHERE valid AND (predicted_direction='UP')=(y=1)) AS correct_count,
+          SELECT protocol,kind,key,branch_id,count(*) FILTER(WHERE valid) AS assessed_count,
+            count(*) FILTER(WHERE valid AND correct) AS correct_count,
             count(DISTINCT target_nav_date) FILTER(WHERE valid) AS distinct_target_dates,
             count(*) FILTER(WHERE available AND y IS NULL) AS pending_count,
             count(*) FILTER(WHERE NOT available) AS unavailable_count,
             count(*) FILTER(WHERE valid AND actual_direction='FLAT') AS flat_count,
-            avg(CASE WHEN valid THEN CASE WHEN (predicted_direction='UP')=(y=1) THEN 1.0 ELSE 0.0 END END) AS accuracy,
+            avg(CASE WHEN valid THEN CASE WHEN correct THEN 1.0 ELSE 0.0 END END) AS accuracy,
             avg(CASE WHEN valid AND y=1 THEN CASE WHEN predicted_direction='UP' THEN 1.0 ELSE 0.0 END END) AS up_recall,
-            avg(CASE WHEN valid AND y=0 THEN CASE WHEN predicted_direction='NON_UP' THEN 1.0 ELSE 0.0 END END) AS non_up_recall,
-            (avg(CASE WHEN valid AND y=1 THEN CASE WHEN predicted_direction='UP' THEN 1.0 ELSE 0.0 END END)
-             +avg(CASE WHEN valid AND y=0 THEN CASE WHEN predicted_direction='NON_UP' THEN 1.0 ELSE 0.0 END END))/2 AS balanced_accuracy,
-            sum(CASE WHEN valid THEN (CASE WHEN (predicted_direction='UP')=(y=1) THEN 1.0 ELSE 0.0 END)/family_shares END)
+            avg(CASE WHEN valid AND protocol='DIRECTION_1D_V1' AND y=0 THEN CASE WHEN predicted_direction='NON_UP' THEN 1.0 ELSE 0.0 END END) AS non_up_recall,
+            avg(CASE WHEN valid AND actual_direction='DOWN' THEN CASE WHEN predicted_direction='DOWN' THEN 1.0 ELSE 0.0 END END) AS down_recall,
+            avg(CASE WHEN valid AND actual_direction='FLAT' THEN CASE WHEN predicted_direction='FLAT' THEN 1.0 ELSE 0.0 END END) AS flat_recall,
+            CASE WHEN protocol='DIRECTION_1D_V2' THEN (
+              avg(CASE WHEN valid AND actual_direction='UP' THEN CASE WHEN predicted_direction='UP' THEN 1.0 ELSE 0.0 END END)
+              +avg(CASE WHEN valid AND actual_direction='DOWN' THEN CASE WHEN predicted_direction='DOWN' THEN 1.0 ELSE 0.0 END END)
+              +avg(CASE WHEN valid AND actual_direction='FLAT' THEN CASE WHEN predicted_direction='FLAT' THEN 1.0 ELSE 0.0 END END))/3
+            ELSE (avg(CASE WHEN valid AND y=1 THEN CASE WHEN predicted_direction='UP' THEN 1.0 ELSE 0.0 END END)
+             +avg(CASE WHEN valid AND y=0 THEN CASE WHEN predicted_direction='NON_UP' THEN 1.0 ELSE 0.0 END END))/2 END AS balanced_accuracy,
+            sum(CASE WHEN valid THEN (CASE WHEN correct THEN 1.0 ELSE 0.0 END)/family_shares END)
               /NULLIF(sum(CASE WHEN valid THEN 1.0/family_shares END),0) AS family_date_weighted_accuracy
-          FROM expanded GROUP BY kind,key,branch_id ORDER BY CASE WHEN kind='TOTAL' THEN 0 ELSE 1 END,kind,key,branch_id LIMIT 1001
+          FROM expanded GROUP BY protocol,kind,key,branch_id ORDER BY CASE WHEN kind='TOTAL' THEN 0 ELSE 1 END,protocol,kind,key,branch_id LIMIT 1001
           """;
         var all=db.sql(rows.replace("o.revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().listOfRows();
         var pairs=db.sql("""
@@ -61,14 +69,14 @@ public class Direction1dStatistics {
             count(*) FILTER(WHERE a.status<>'AVAILABLE' AND b.status='AVAILABLE') AS weekly_only_count,
             count(*) FILTER(WHERE a.status='AVAILABLE' AND b.status='AVAILABLE' AND o.y IS NOT NULL) AS assessed_pair_count,
             sum(CASE WHEN a.status='AVAILABLE' AND b.status='AVAILABLE' AND o.y IS NOT NULL THEN
-              (CASE WHEN (b.predicted_direction='UP')=(o.y=1) THEN 1 ELSE 0 END)
-              -(CASE WHEN (a.predicted_direction='UP')=(o.y=1) THEN 1 ELSE 0 END) END) AS weekly_extra_correct
+              (CASE WHEN b.predicted_direction=o.actual_direction THEN 1 ELSE 0 END)
+              -(CASE WHEN a.predicted_direction=o.actual_direction THEN 1 ELSE 0 END) END) AS weekly_extra_correct
           FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
           JOIN direction_1d_forecast_receipt r USING(forecast_id)
           JOIN direction_1d_forecast_score a ON a.forecast_id=f.forecast_id AND a.branch_id='FIXED'
           JOIN direction_1d_forecast_score b ON b.forecast_id=f.forecast_id AND b.branch_id='WEEKLY'
           LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
-          WHERE u.user_id=:u AND r.status='VERIFIED' AND f.target_nav_date BETWEEN :start AND :end
+          WHERE u.user_id=:u AND f.protocol='DIRECTION_1D_V2' AND r.status='VERIFIED' AND f.target_nav_date BETWEEN :start AND :end
             AND encode(sha256(convert_to(f.payload_json,'UTF8')),'hex')=f.content_hash
             AND COALESCE((f.payload->>'expires_at')::timestamptz,'infinity'::timestamptz)>clock_timestamp()
           """.replace("o.revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().singleRow();
@@ -82,7 +90,7 @@ public class Direction1dStatistics {
             count(*) FILTER(WHERE status NOT IN ('SPECIAL_POLICY_REQUIRED','GROUP_UNVERIFIED','SOURCE_UNAVAILABLE')) AS applicable_fund_days,
             count(*) FILTER(WHERE status='MISSED_DEADLINE') AS missed_deadline_count,
             count(*) FILTER(WHERE status='FAILED') AS failed_count,
-            (SELECT count(*) FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
+            (SELECT count(DISTINCT (f.fund_code,f.target_nav_date)) FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
               JOIN direction_1d_forecast_receipt r USING(forecast_id)
               WHERE u.user_id=:u AND r.status='VERIFIED' AND f.target_nav_date BETWEEN :start AND :end) AS verified_forecast_count
           FROM attempted

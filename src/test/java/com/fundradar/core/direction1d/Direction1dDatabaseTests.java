@@ -52,6 +52,49 @@ class Direction1dDatabaseTests {
         assertEquals(2,branches.size());
         for(var b:branches){assertEquals(0L,b.get("assessed_count"));assertEquals(1L,b.get("pending_count"));assertNull(b.get("accuracy"));}
     }
+    @Test void threeStateFlatMissesDownAndLegacyNonUpStillMatchesDown() {
+        UUID scope=repo.scope(user,LocalDate.of(2026,9,14),List.of());
+        UUID newer=null;
+        for(String protocol:List.of("DIRECTION_1D_V1","DIRECTION_1D_V2")) {
+            UUID id=UUID.randomUUID();if(protocol.endsWith("V2"))newer=id;
+            db.sql("""
+              INSERT INTO direction_1d_forecast(forecast_id,source_job_id,protocol,cohort_id,fund_code,base_nav_date,target_nav_date,
+                calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at)
+              SELECT :id,:job,:protocol,:cohort,fund_code,base_nav_date,target_nav_date,calendar_version,window_open_at,
+                deadline_at,payload_json,payload,input_hash,content_hash,generated_at FROM direction_1d_forecast WHERE forecast_id=:source
+              """).param("id",id).param("job",UUID.randomUUID()).param("protocol",protocol)
+                    .param("cohort",UUID.randomUUID().toString()).param("source",forecast).update();
+            db.sql("""
+              INSERT INTO direction_1d_forecast_score(forecast_id,branch_id,score,predicted_direction,status)
+              VALUES(:id,'FIXED',.6,:direction,'AVAILABLE')
+              """).param("id",id).param("direction",protocol.endsWith("V2")?"FLAT":"NON_UP").update();
+            db.sql("""
+              INSERT INTO direction_1d_forecast_receipt(forecast_id,receipt_verified_at,content_hash,status)
+              SELECT :id,receipt_verified_at,content_hash,status FROM direction_1d_forecast_receipt WHERE forecast_id=:source
+              """).param("id",id).param("source",forecast).update();
+            repo.link(user,id,scope);
+            db.sql("""
+              INSERT INTO direction_1d_outcome(forecast_id,revision_no,label_snapshot_id,label_hash,payload,base_unit_nav,
+                target_unit_nav,y,actual_direction,nav_return,label_observed_at,revision_reason)
+              VALUES(:id,1,:snapshot,:hash,'{}',1,.99,0,'DOWN',-.01,clock_timestamp(),'SYNTHETIC_ROLLBACK_ONLY')
+              """).param("id",id).param("snapshot",UUID.randomUUID()).param("hash","b".repeat(64)).update();
+        }
+        assertEquals(newer,repo.currentPublic("123456",LocalDate.of(2026,9,14)));
+        var current=repo.currentHistory(user,"123456");
+        assertEquals(newer,((Map<?,?>)((List<?>)current.get("items")).get(0)).get("forecastId"));
+        for(var row:repo.metrics(user)) {
+            if("DIRECTION_1D_V2".equals(row.get("protocol")))assertEquals(0L,row.get("correct_count"));
+            if("DIRECTION_1D_V1".equals(row.get("protocol")))assertEquals(1L,row.get("correct_count"));
+        }
+        var result=stats.read(user,LocalDate.of(2026,1,1),LocalDate.of(2026,12,31));
+        for(Object item:(List<?>)result.get("branches")) {
+            var row=(Map<?,?>)item;
+            if("DIRECTION_1D_V2".equals(row.get("protocol"))) {
+                assertEquals(0L,row.get("correct_count"));assertNotNull(row.get("down_recall"));assertNull(row.get("flat_recall"));
+            }
+            if("DIRECTION_1D_V1".equals(row.get("protocol")))assertEquals(1L,row.get("correct_count"));
+        }
+    }
     @Test void cancellationKeepsOldAuthorizedHistory() {
         db.sql("DELETE FROM watchlist_item WHERE user_id=:u").param("u",user).update();
         assertEquals(forecast,repo.detail(user,forecast).get("forecastId"));

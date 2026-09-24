@@ -61,6 +61,15 @@ public class Direction1dRepository {
         return db.sql("SELECT EXISTS(SELECT 1 FROM watchlist_item WHERE user_id=:u AND fund_code=:c)")
                 .param("u",user).param("c",code).query(Boolean.class).single();
     }
+    /** 原作业编号只从本人已关联的档案取得；浏览器不能指定其他账号或公共作业编号。 */
+    public Map<String,Object> evidenceSource(UUID user,String code,UUID forecastId) {
+        return db.sql("""
+          SELECT f.source_job_id,f.content_hash FROM direction_1d_forecast f
+          JOIN direction_1d_user_forecast u USING(forecast_id)
+          WHERE u.user_id=:user AND f.fund_code=:code AND f.forecast_id=:id
+          """).param("user",user).param("code",code).param("id",forecastId)
+                .query().listOfRows().stream().findFirst().orElseThrow(()->new NoSuchElementException("预测记录不属于本人"));
+    }
     public UUID scope(UUID user,LocalDate target,List<Map<String,Object>> items) {
         UUID id=UUID.randomUUID(); String raw=encode(items);
         db.sql("""
@@ -77,8 +86,21 @@ public class Direction1dRepository {
                 .param("status",status).param("reasons",encode(reasons)).param("trace",com.fundradar.core.common.trace.TraceContext.getTraceId()).update();
     }
     public UUID currentPublic(String code,LocalDate target) {
-        return db.sql("SELECT forecast_id FROM direction_1d_forecast WHERE fund_code=:code AND target_nav_date=:target ORDER BY stored_at LIMIT 1")
-                .param("code",code).param("target",target).query(UUID.class).optional().orElse(null);
+        return currentPublic(code,target,Direction1dPolicy.ACTIVE_PROTOCOL);
+    }
+    private UUID currentPublic(String code,LocalDate target,String protocol) {
+        return db.sql("SELECT forecast_id FROM direction_1d_forecast WHERE fund_code=:code AND target_nav_date=:target AND protocol=:protocol ORDER BY stored_at LIMIT 1")
+                .param("code",code).param("target",target).param("protocol",protocol).query(UUID.class).optional().orElse(null);
+    }
+    /** 最新日期同日并存两版时优先三分类；历史游标排序不改变，旧记录仍完整保留。 */
+    public Map<String,Object> currentHistory(UUID user,String code) {
+        UUID id=db.sql("""
+          SELECT f.forecast_id FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+          WHERE u.user_id=:user AND f.fund_code=:code
+          ORDER BY f.target_nav_date DESC,(f.protocol=:protocol) DESC,f.stored_at DESC,f.forecast_id DESC LIMIT 1
+          """).param("user",user).param("code",code).param("protocol",Direction1dPolicy.ACTIVE_PROTOCOL)
+                .query(UUID.class).optional().orElse(null);
+        return Map.of("items",id==null?List.of():List.of(detail(user,id)),"page",1,"pageSize",1,"totalCount",id==null?0:1);
     }
     /** 是否新建由持有数据库去重锁的事务决定，避免自动任务和手动任务并发时重复计为新生成。 */
     public record ArchivedForecast(UUID forecastId,boolean created) {}
@@ -86,14 +108,14 @@ public class Direction1dRepository {
         JsonNode p=Direction1dPolicy.validate(json,raw,hash,expectedCode,now());
         ArchivedForecast saved=tx.execute(ignored->{
             db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key,721109))").param("key",p.path("task_key").asText()).query((r,n)->0).list();
-            UUID existing=currentPublic(expectedCode,LocalDate.parse(p.path("target_nav_date").asText()));
+            UUID existing=currentPublic(expectedCode,LocalDate.parse(p.path("target_nav_date").asText()),p.path("protocol").asText());
             if(existing!=null) return new ArchivedForecast(existing,false);
             UUID id=UUID.randomUUID();
             db.sql("""
               INSERT INTO direction_1d_forecast(forecast_id,source_job_id,protocol,cohort_id,fund_code,base_nav_date,target_nav_date,
                 calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at)
               VALUES(:id,:job,:protocol,:cohort,:code,:base,:target,:calendar,:open,:deadline,:raw,CAST(:raw AS jsonb),:input,:hash,:generated)
-              """).param("id",id).param("job",job).param("protocol",Direction1dPolicy.PROTOCOL).param("cohort",p.path("cohort_id").asText())
+              """).param("id",id).param("job",job).param("protocol",p.path("protocol").asText()).param("cohort",p.path("cohort_id").asText())
                     .param("code",expectedCode).param("base",LocalDate.parse(p.path("base_nav_date").asText()))
                     .param("target",LocalDate.parse(p.path("target_nav_date").asText())).param("calendar",p.path("calendar_version").asText())
                     .param("open",Timestamp.from(Direction1dPolicy.instant(p,"window_open_at")))
@@ -221,8 +243,10 @@ public class Direction1dRepository {
     }
     public List<Map<String,Object>> metrics(UUID user) {
         return db.sql("""
-          SELECT s.branch_id,count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS assessed_count,
-            count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL AND (s.predicted_direction='UP')=(o.y=1)) AS correct_count,
+          SELECT f.protocol,s.branch_id,count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS assessed_count,
+            count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL AND
+              CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
+              ELSE (s.predicted_direction='UP')=(o.y=1) END) AS correct_count,
             count(DISTINCT f.target_nav_date) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS distinct_target_dates,
             count(*) FILTER(WHERE o.y IS NULL) AS pending_count,
             count(*) FILTER(WHERE o.actual_direction='FLAT') AS flat_count,
@@ -230,7 +254,7 @@ public class Direction1dRepository {
           FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
           JOIN direction_1d_forecast_score s USING(forecast_id) LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
           LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
-          WHERE u.user_id=:u AND s.status='AVAILABLE' GROUP BY s.branch_id ORDER BY s.branch_id
+          WHERE u.user_id=:u AND s.status='AVAILABLE' GROUP BY f.protocol,s.branch_id ORDER BY f.protocol,s.branch_id
           """).param("u",user).query().listOfRows();
     }
     public void health(String state,int checked,int failed,String message,boolean finish) {

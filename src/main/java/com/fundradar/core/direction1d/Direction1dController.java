@@ -21,6 +21,10 @@ public class Direction1dController {
         return ApiResponse.success(service.coverage(keyword,fundType,page,pageSize));
     }
     @GetMapping("/{fundCode}/prediction-1d") public ApiResponse<?> current(@PathVariable String fundCode) { return ApiResponse.success(service.current(fundCode)); }
+    @GetMapping("/{fundCode}/prediction-1d/evidence/{forecastId}")
+    public ApiResponse<?> evidence(@PathVariable String fundCode,@PathVariable UUID forecastId) {
+        return ApiResponse.success(Direction1dPolicy.view(service.evidence(fundCode,forecastId)));
+    }
     @PostMapping("/{fundCode}/prediction-1d/generate") public ResponseEntity<?> generate(@PathVariable String fundCode,@RequestBody(required=false) Map<String,Object> body) {
         if(body!=null&&!body.isEmpty()) throw new IllegalArgumentException("NO_CLIENT_PARAMETERS");
         return ResponseEntity.accepted().body(ApiResponse.success(service.generate(fundCode)));
