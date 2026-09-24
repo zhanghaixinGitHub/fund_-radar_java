@@ -68,6 +68,10 @@ public class Direction1dService {
         return status;
     }
     public Map<String,Object> process(UUID user,UUID scope,JsonNode coverage,JsonNode w) {
+        return process(user,scope,coverage,w,Duration.ZERO);
+    }
+    /** 批量入口可有限等待已确认提交的任务；个人页面和定时检查保持原有快速返回行为。 */
+    Map<String,Object> process(UUID user,UUID scope,JsonNode coverage,JsonNode w,Duration waitBudget) {
         String code=coverage.path("fund_code").asText(); LocalDate target=LocalDate.parse(w.path("target_nav_date").asText());
         UUID existing=repo.currentPublic(code,target);
         if(existing!=null) { repo.confirm(existing); repo.link(user,existing,scope); return Map.of("forecastId",existing,"status","PREDICTED","reused",true); }
@@ -79,13 +83,26 @@ public class Direction1dService {
             repo.attempt(scope,code,target,null,"MISSED_DEADLINE",List.of("MISSED_DEADLINE")); return Map.of("status","MISSED_DEADLINE");
         }
         for(JsonNode reason:coverage.path("reason_codes")) {
+            if(Set.of("NAV_CURRENT_NOT_READY","NAV_LATEST_NOT_READY","NAV_GAP","DATA_PENDING","HISTORY_TOO_SHORT").contains(reason.asText())) {
+                repo.attempt(scope,code,target,null,"WAITING_DATA",Direction1dPolicy.view(coverage.path("reason_codes")));
+                return Map.of("status","WAITING_DATA","reason",reason.asText());
+            }
             if("MODEL_NOT_ACTIVE_FOR_WINDOW".equals(reason.asText()) || "MODEL_UNAVAILABLE".equals(reason.asText())) {
                 repo.attempt(scope,code,target,null,"MODEL_UNAVAILABLE",Direction1dPolicy.view(coverage.path("reason_codes")));
                 return Map.of("status","MODEL_UNAVAILABLE","reason",reason.asText());
             }
         }
         JsonNode task=client.post("/forecast-jobs",Map.of("fund_code",code)); UUID job=UUID.fromString(task.path("job_id").asText());
-        JsonNode result=client.get("/forecast-jobs/"+job); String state=result.path("state").asText();
+        JsonNode result=client.get("/forecast-jobs/"+job);
+        long waitUntil=System.nanoTime()+waitBudget.toNanos();
+        // 只轮询已返回编号的作业，不重复提交POST；超时保留排队/运行状态，不能计为已生成。
+        while(Set.of("QUEUED","RUNNING").contains(result.path("state").asText()) && System.nanoTime()<waitUntil) {
+            try {Thread.sleep(200);}
+            catch(InterruptedException error) {Thread.currentThread().interrupt();throw new IllegalStateException("一日预测等待被中断",error);}
+            if(System.nanoTime()>=waitUntil) break;
+            result=client.get("/forecast-jobs/"+job);
+        }
+        String state=result.path("state").asText();
         if("SUCCEEDED".equals(state)) {
             JsonNode payload=result.path("result");
             var saved=repo.archive(job,payload.path("payload_json").asText(),payload.path("content_hash").asText(),code);
@@ -95,7 +112,7 @@ public class Direction1dService {
         }
         String reason=result.path("result").path("reason").asText(state);
         if("FAILED".equals(state)) state=switch(reason) {
-            case "DATA_PENDING" -> "WAITING_DATA";
+            case "DATA_PENDING","NAV_CURRENT_NOT_READY","NAV_LATEST_NOT_READY","NAV_GAP" -> "WAITING_DATA";
             case "MODEL_PENDING","MODEL_NOT_ACTIVE_FOR_WINDOW","MODEL_UNAVAILABLE" -> "MODEL_UNAVAILABLE";
             default -> "FAILED";
         };

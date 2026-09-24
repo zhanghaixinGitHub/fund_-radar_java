@@ -29,7 +29,12 @@ public final class Direction1dPolicy {
                     || !expectedCode.equals(p.path("fund_code").asText())) throw new IllegalArgumentException("PROTOCOL_MISMATCH");
             LocalDate t=LocalDate.parse(p.path("base_nav_date").asText()),u=LocalDate.parse(p.path("target_nav_date").asText());
             Instant open=instant(p,"window_open_at"),deadline=instant(p,"deadline_at"),generated=instant(p,"generated_at");
-            if(!open.equals(t.atTime(18,0).atZone(ZONE).toInstant()) || !deadline.equals(u.atTime(8,30).atZone(ZONE).toInstant())
+            // 旧原文继续按18:00—08:30核验；新规则以已结束估值日净值为基准，目标日15:00前留档。
+            String generation=p.path("generation_policy").asText("LEGACY_WINDOW_V1");
+            if(!Set.of("LEGACY_WINDOW_V1","CN_NAV_READY_CLOSE_V1").contains(generation))
+                throw new IllegalArgumentException("INVALID_GENERATION_POLICY");
+            boolean navReady="CN_NAV_READY_CLOSE_V1".equals(generation);
+            if(!open.equals(t.atTime(navReady?15:18,0).atZone(ZONE).toInstant()) || !deadline.equals(u.atTime(navReady?15:8,navReady?0:30).atZone(ZONE).toInstant())
                     || !u.equals(Direction1dCalendar.next(t)) || !p.path("calendar_version").asText().equals(Direction1dCalendar.VERSION)
                     || !p.path("latest_nav_date").asText().equals(t.toString())
                     || generated.isBefore(open) || !generated.isBefore(deadline) || generated.isAfter(now.plusSeconds(5)))

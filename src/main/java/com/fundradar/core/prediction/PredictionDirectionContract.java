@@ -7,14 +7,14 @@ import java.util.*;
 
 /** 新建议只接受已冻结的三分类口径；旧二分类由历史读取与原动作回放单独保留。 */
 public final class PredictionDirectionContract {
-    public static final String TARGET = "NEXT_EXECUTABLE_CASH_REINVESTED_THREE_STATE_V2";
+    public static final String TARGET = "NAV_ANCHORED_CASH_REINVESTED_THREE_STATE_V3";
     private static final ObjectMapper JSON = new ObjectMapper();
     public static final JsonNode RULE = loadRule();
     public static final String HASH = Direction1dPolicy.hash(canonical(RULE));
     private PredictionDirectionContract() {}
 
     private static JsonNode loadRule() {
-        try (var stream = PredictionDirectionContract.class.getResourceAsStream("/prediction-policy-v2.json")) {
+        try (var stream = PredictionDirectionContract.class.getResourceAsStream("/prediction-policy-v3.json")) {
             var root = JSON.readTree(stream);
             if (!TARGET.equals(root.path("target_definition_id").asText())) throw new IllegalStateException("目标配置错误");
             return root.path("direction");

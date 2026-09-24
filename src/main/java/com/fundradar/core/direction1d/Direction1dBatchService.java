@@ -2,6 +2,7 @@ package com.fundradar.core.direction1d;
 
 import org.springframework.stereotype.Service;
 import java.time.LocalDate;
+import java.time.Duration;
 import java.util.*;
 
 /** 同步中心和日常自动预测共用留档链路；按基金统计，多个账号关注不重复计算基金只数。 */
@@ -31,13 +32,16 @@ public class Direction1dBatchService {
         var coverage=client.coverage(List.of(code)).path("items").get(0);
         UUID after=null;
         boolean created=false;
+        // 同一基金公共计算只等待一次，避免关注账号多时累乘等待而超过内部HTTP超时。
+        Duration waitBudget=Duration.ofSeconds(30);
         Map<String,Object> result=Map.of("status","NO_LONGER_FOLLOWED");
         do {
             var users=repo.predictionUsers(code,after);
             if(users.isEmpty()) break;
             for(UUID user:users) {
                 UUID scope=repo.scope(user,target,List.of(Map.of("fund_code",code,"coverage",Direction1dPolicy.view(coverage))));
-                result=service.process(user,scope,coverage,w);
+                result=service.process(user,scope,coverage,w,waitBudget);
+                waitBudget=Duration.ZERO;
                 if("PREDICTED".equals(result.get("status")) && !Boolean.TRUE.equals(result.get("reused"))) created=true;
             }
             after=users.get(users.size()-1);

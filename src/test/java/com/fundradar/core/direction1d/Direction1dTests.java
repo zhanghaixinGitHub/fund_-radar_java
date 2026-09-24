@@ -34,6 +34,19 @@ class Direction1dTests {
     @Test void validatesIndependentOneDayContract() throws Exception {
         String raw=payload();assertNotNull(Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),"001632",Instant.parse("2026-09-11T12:00:00Z")));
     }
+    @Test void navReadyPolicyAllowsDaytimeButRejectsCloseAndUnknownPolicy() throws Exception {
+        var p=(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(payload());
+        p.put("generation_policy","CN_NAV_READY_CLOSE_V1");
+        p.put("window_open_at","2026-09-11T15:00:00+08:00");
+        p.put("deadline_at","2026-09-14T15:00:00+08:00");
+        p.put("generated_at","2026-09-14T14:59:59+08:00");
+        String raw=p.toString();
+        assertDoesNotThrow(()->Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),"001632",Instant.parse("2026-09-14T07:00:00Z")));
+        p.put("generated_at","2026-09-14T15:00:00+08:00");String late=p.toString();
+        assertThrows(IllegalArgumentException.class,()->Direction1dPolicy.validate(json,late,Direction1dPolicy.hash(late),"001632",Instant.now()));
+        p.put("generation_policy","UNKNOWN");String unknown=p.toString();
+        assertThrows(IllegalArgumentException.class,()->Direction1dPolicy.validate(json,unknown,Direction1dPolicy.hash(unknown),"001632",Instant.now()));
+    }
     @Test void wrongTargetModelHashOrUserFailsClosed() throws Exception {
         String raw=payload();
         assertThrows(IllegalArgumentException.class,()->Direction1dPolicy.validate(json,raw,"bad","001632",Instant.now()));

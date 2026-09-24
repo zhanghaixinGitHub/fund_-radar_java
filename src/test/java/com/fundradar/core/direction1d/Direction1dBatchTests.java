@@ -20,6 +20,17 @@ class Direction1dBatchTests {
     final Direction1dBatchService batch=new Direction1dBatchService(repo,service,client);
     final LocalDate target=LocalDate.of(2026,9,23);
     @AfterEach void clear(){CurrentUserContext.clear();}
+    @Test void waitsForRequiredNavAndReusesOriginalBeforeCheckingNewModel() throws Exception {
+        var actual=new Direction1dService(repo,client);UUID user=UUID.randomUUID(),scopeId=UUID.randomUUID();
+        var w=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
+        var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[\"NAV_CURRENT_NOT_READY\"]}");
+        var waiting=actual.process(user,scopeId,coverage,w);
+        assertEquals("WAITING_DATA",waiting.get("status"));
+        assertEquals("NAV_CURRENT_NOT_READY",waiting.get("reason"));verifyNoInteractions(client);
+        UUID existing=UUID.randomUUID();when(repo.currentPublic("008888",target)).thenReturn(existing);
+        assertEquals(Map.of("forecastId",existing,"status","PREDICTED","reused",true),actual.process(user,scopeId,coverage,w));
+        verifyNoInteractions(client);verify(repo).confirm(existing);verify(repo).link(user,existing,scopeId);
+    }
 
     @Test void oneFundFollowedByTwoUsersCountsOneCreationAndLinksBoth() throws Exception {
         var state=json.readTree("{\"window\":{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}}");
@@ -30,11 +41,11 @@ class Direction1dBatchTests {
         when(repo.predictionUsers("008888",null)).thenReturn(List.of(first,second));
         when(repo.predictionUsers("008888",second)).thenReturn(List.of());
         when(repo.scope(any(),eq(target),anyList())).thenReturn(scope);
-        when(service.process(eq(first),eq(scope),any(),any())).thenReturn(Map.of("status","PREDICTED","reused",false));
-        when(service.process(eq(second),eq(scope),any(),any())).thenReturn(Map.of("status","PREDICTED","reused",true));
+        when(service.process(eq(first),eq(scope),any(),any(),eq(Duration.ofSeconds(30)))).thenReturn(Map.of("status","PREDICTED","reused",false));
+        when(service.process(eq(second),eq(scope),any(),any(),eq(Duration.ZERO))).thenReturn(Map.of("status","PREDICTED","reused",true));
         assertEquals(Map.of("status","PREDICTED","reused",false),batch.generate("008888",target));
-        verify(service,times(2)).process(any(),eq(scope),any(),any());
-        when(service.process(eq(first),eq(scope),any(),any())).thenReturn(Map.of("status","PREDICTED","reused",true));
+        verify(service,times(2)).process(any(),eq(scope),any(),any(),any());
+        when(service.process(eq(first),eq(scope),any(),any(),eq(Duration.ofSeconds(30)))).thenReturn(Map.of("status","PREDICTED","reused",true));
         assertEquals(Map.of("status","PREDICTED","reused",true),batch.generate("008888",target));
     }
 
@@ -92,5 +103,35 @@ class Direction1dBatchTests {
         var result=actual.process(user,scope,coverage,window);
         assertEquals(true,result.get("reused"));
         verify(repo).link(user,forecast,scope);
+    }
+
+    @Test void batchWaitsForQueuedJobThenArchivesWithoutResubmitting() throws Exception {
+        var actual=new Direction1dService(repo,client);
+        UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID(),forecast=UUID.randomUUID();
+        var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
+        var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
+        when(client.post("/forecast-jobs",Map.of("fund_code","008888"))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"QUEUED\"}"),
+                json.readTree("{\"state\":\"RUNNING\"}"),
+                json.readTree("{\"state\":\"SUCCEEDED\",\"result\":{\"payload_json\":\"raw\",\"content_hash\":\"hash\"}}"));
+        when(repo.archive(job,"raw","hash","008888")).thenReturn(new Direction1dRepository.ArchivedForecast(forecast,true));
+        assertEquals(false,actual.process(user,scope,coverage,window,Duration.ofSeconds(5)).get("reused"));
+        verify(client,times(1)).post("/forecast-jobs",Map.of("fund_code","008888"));
+        verify(repo).link(user,forecast,scope);
+    }
+
+    @Test void waitTimeoutDoesNotInventArchiveAndClosedWindowDoesNotSubmit() throws Exception {
+        var actual=new Direction1dService(repo,client);
+        UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID();
+        var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
+        var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
+        when(client.post("/forecast-jobs",Map.of("fund_code","008888"))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"RUNNING\"}"));
+        assertEquals("RUNNING",actual.process(user,scope,coverage,window,Duration.ofMillis(1)).get("status"));
+        verify(repo,never()).archive(any(),any(),any(),any());
+        clearInvocations(client);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)window).put("status","MISSED_DEADLINE");
+        assertEquals("MISSED_DEADLINE",actual.process(user,scope,coverage,window,Duration.ofSeconds(30)).get("status"));
+        verifyNoInteractions(client);
     }
 }
