@@ -9,7 +9,11 @@ import java.util.UUID;
 /** 同步中心的对外业务契约，便于后续登记更多独立同步任务。 */
 public interface SyncJobService {
 
-    /** 创建覆盖SPX、市场数据、关注基金预测及模拟费率的六项后台串行批次。 */
+    /** 更新明确指定基金的持仓、公司经营与公告，第一阶段仅支持 002112。 */
+    SyncJobResponse startFundMaterials(String fundCode);
+    SyncJobResponse getLatestFundMaterials();
+
+    /** 创建覆盖SPX、市场数据、基金持仓资料、关注基金预测及模拟费率的七项后台串行批次。 */
     SyncJobResponse startAll();
 
     /** 检查全部有效关注基金并生成本期一日预测，已有留档复用。 */

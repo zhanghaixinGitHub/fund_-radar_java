@@ -93,7 +93,7 @@ public class InternalFundQueryService implements FundQueryService {
 
     @Override
     /**
-     * 查询关注后完整详情；调用方已经完成当前用户关系校验，因此这里不接收用户参数。
+     * 查询市场与关注页共用的完整资料；调用方完成各自入口的访问校验，因此这里不接收用户参数。
      * 完整详情不写共享 Redis，避免任何授权结论与用户态进入缓存。
      */
     public WatchlistFundDetailResponse getWatchlistFundDetail(String fundCode) {
@@ -129,7 +129,7 @@ public class InternalFundQueryService implements FundQueryService {
     }
 
     @Override
-    /** 查询关注后份额历史；调用方已鉴权且不写入共享 Redis。 */
+    /** 查询基金公共份额历史；调用方已鉴权且不写入共享 Redis。 */
     public FundShareHistoryResponse getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
         return toShareHistoryResponse(aiFundClient.getFundShareHistory(fundCode, startDate, endDate));
     }

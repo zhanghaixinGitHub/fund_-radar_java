@@ -22,7 +22,7 @@ public interface FundQueryService {
     /** 查询单只基金详情，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundDetailResponse getFund(String fundCode);
 
-    /** 查询关注后完整详情；调用方必须已完成当前用户关注关系校验。 */
+    /** 查询基金公共完整资料；调用方校验基金查看权限，关注页还须校验本人关注关系。 */
     WatchlistFundDetailResponse getWatchlistFundDetail(String fundCode);
 
     /** 查询一只基金在明确日期窗口内的历史净值，可在 AI 服务不可用时返回显式标记的缓存。 */
@@ -31,6 +31,6 @@ public interface FundQueryService {
     /** 查询当前基金市场受控样本中的同类型比较，不表示全市场排名。 */
     FundSameTypeComparisonResponse getFundSameTypeComparison(String fundCode);
 
-    /** 查询关注后基金份额规模历史；调用方必须已完成当前用户关注关系校验。 */
+    /** 查询基金公共份额规模历史；与个人持有份额无关，由入口执行相应访问校验。 */
     FundShareHistoryResponse getFundShareHistory(String fundCode, LocalDate startDate, LocalDate endDate);
 }

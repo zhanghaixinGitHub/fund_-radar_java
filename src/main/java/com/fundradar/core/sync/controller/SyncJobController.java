@@ -39,7 +39,21 @@ public class SyncJobController {
         this.syncJobService = syncJobService;
     }
 
-    /** 一键创建六项任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
+    /** 仅创建明确基金的后台任务；空参数不能扩大为全市场，沿用同步管理员权限。 */
+    @PostMapping("/fund-materials")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startFundMaterials(@RequestParam(required=false) String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startFundMaterials(fundCode)));
+    }
+
+    @GetMapping("/fund-materials/latest")
+    public ApiResponse<SyncJobResponse> getLatestFundMaterials() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestFundMaterials());
+    }
+
+    /** 一键创建七项任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);

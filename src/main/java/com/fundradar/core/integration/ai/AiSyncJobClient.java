@@ -34,6 +34,31 @@ public class AiSyncJobClient {
                 .build();
     }
 
+    /** 指定基金创建资料任务；不自动重发 POST，返回状态后由页面轮询同一任务。 */
+    public AiSyncJobStatus startFundMaterials(String fundCode) {
+        try {
+            var payload = restClient.post().uri(builder -> builder
+                    .path("/internal/v1/funds/sync-jobs/fund-materials").queryParam("fundCode", fundCode).build())
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+            if (payload == null) throw new AiServiceUnavailableException("empty materials sync job", null);
+            return payload;
+        } catch (RestClientResponseException error) {
+            if (error.getStatusCode().value() == 409) throw new MarketNavSyncInProgressException("sync in progress", error);
+            throw unavailable(error);
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException error) {
+            throw error;
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
+    public AiSyncJobStatus getLatestFundMaterials() {
+        try {
+            return restClient.get().uri("/internal/v1/funds/sync-jobs/fund-materials/latest")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
     /** 创建后台串行批次；不重试 POST，避免网络超时时重复触发外部同步。 */
     public AiSyncJobStatus startAll() {
         try {

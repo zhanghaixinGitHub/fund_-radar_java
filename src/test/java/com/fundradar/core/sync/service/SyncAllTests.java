@@ -149,6 +149,37 @@ class SyncAllTests {
     }
 
     @Test
+    void materialsScopeAndPermissionsRejectBeforeCallingPython() throws Exception {
+        String path = "/api/v1/sync-jobs/fund-materials";
+        mvc.perform(post(path).param("fundCode", "002112")).andExpect(status().isUnauthorized());
+        login(PermissionCode.SYNC_JOB_READ);
+        mvc.perform(post(path).param("fundCode", "002112")).andExpect(status().isForbidden());
+        login(PermissionCode.SYNC_JOB_START);
+        mvc.perform(post(path)).andExpect(status().isBadRequest());
+        for (String code : List.of("", " ", "008888", "002112.OF")) {
+            mvc.perform(post(path).param("fundCode", code)).andExpect(status().isBadRequest());
+        }
+        assertTrue(calls.isEmpty());
+    }
+
+    @Test
+    void materialsJobUsesExistingClientAndPreservesPartialStatusAndConflict() throws Exception {
+        String path = "/api/v1/sync-jobs/fund-materials";
+        login(PermissionCode.SYNC_JOB_START, PermissionCode.SYNC_JOB_READ);
+        upstreamBody = upstreamBody.replace("MARKET_ALL", "FUND_MATERIALS");
+        mvc.perform(post(path).param("fundCode", "002112")).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("PARTIAL_SUCCESS"))
+                .andExpect(jsonPath("$.data.jobType").value("FUND_MATERIALS"));
+        mvc.perform(get(path + "/latest")).andExpect(status().isOk());
+        assertEquals("fundCode=002112", queries.get(0));
+        assertEquals(List.of("POST /internal/v1/funds/sync-jobs/fund-materials",
+                "GET /internal/v1/funds/sync-jobs/fund-materials/latest"), calls);
+        upstreamStatus = 409;
+        mvc.perform(post(path).param("fundCode", "002112")).andExpect(status().isConflict());
+        assertEquals(3, calls.size());
+    }
+
+    @Test
     void predictionTaskUsesSyncPermissionsAndForwardsToBackgroundQueue() throws Exception {
         String path="/api/v1/sync-jobs/direction-1d-predictions";
         mvc.perform(post(path)).andExpect(status().isUnauthorized());

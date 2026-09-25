@@ -25,6 +25,20 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startFundMaterials(String fundCode) {
+        if (!"002112".equals(fundCode)) {
+            throw new IllegalArgumentException("当前仅支持 002112 的持仓与公司资料更新，请明确指定基金代码。");
+        }
+        return toResponse(aiSyncJobClient.startFundMaterials(fundCode));
+    }
+
+    @Override
+    public SyncJobResponse getLatestFundMaterials() {
+        var source = aiSyncJobClient.getLatestFundMaterials();
+        return source == null ? null : toResponse(source);
+    }
+
+    @Override
     public SyncJobResponse startAll() {
         SyncJobResponse response = toResponse(aiSyncJobClient.startAll());
         LOGGER.info("InternalSyncJobService.startAll   >>> sync batch started, jobId={}, status={}",

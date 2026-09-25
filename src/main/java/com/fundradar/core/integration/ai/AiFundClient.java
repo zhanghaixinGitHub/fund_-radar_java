@@ -1,6 +1,8 @@
 package com.fundradar.core.integration.ai;
 
 import com.fundradar.core.common.trace.TraceContext;
+import com.fundradar.core.fund.api.FundMaterialsResponse;
+import com.fundradar.core.fund.api.FundDocumentsResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -24,6 +26,49 @@ import java.util.List;
  */
 @Service
 public class AiFundClient {
+
+    /** 读取已发布公共资料快照；参数来自服务端校验，不接受外部目标地址。 */
+    public FundMaterialsResponse getFundMaterials(String code, String reportId, String stockCode) {
+        return readMaterials(builder -> {
+            builder.path("/internal/v1/funds/{code}/materials");
+            if (reportId != null) builder.queryParam("reportId", reportId);
+            if (stockCode != null) builder.queryParam("stockCode", stockCode);
+            return builder.build(code);
+        }, FundMaterialsResponse.class);
+    }
+
+    /** 公告筛选和分页在 Python 只读快照中完成；每次最多返回 50 条。 */
+    public FundDocumentsResponse getFundDocuments(String code, int page, int size, String kind,
+            String stockCode, String keyword, boolean latestOnly) {
+        return readMaterials(builder -> {
+            builder.path("/internal/v1/funds/{code}/materials/documents")
+                    .queryParam("page", page).queryParam("pageSize", size).queryParam("kind", kind)
+                    .queryParam("latestOnly", latestOnly);
+            // 使用模板变量编码搜索词，避免 &、# 等字符改变查询语义。
+            builder.queryParam("keyword", "{keyword}");
+            if (stockCode != null) builder.queryParam("stockCode", stockCode);
+            return builder.build(java.util.Map.of("code", code, "keyword", keyword));
+        }, FundDocumentsResponse.class);
+    }
+
+    private <T> T readMaterials(java.util.function.Function<UriBuilder, URI> uri, Class<T> type) {
+        try {
+            T value = restClient.get().uri(uri).header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId()).retrieve().body(type);
+            if (value == null) throw new AiServiceUnavailableException("Empty fund materials", null);
+            return value;
+        } catch (RestClientResponseException exception) {
+            if (exception.getStatusCode().value() == 404) throw new FundNotFoundException("unknown");
+            if (exception.getStatusCode().value() == 422) throw new IllegalArgumentException("所选资料暂不可用。");
+            throw unavailable(exception);
+        } catch (AiServiceUnavailableException exception) {
+            throw exception;
+        } catch (IllegalArgumentException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
+        }
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AiFundClient.class);
     private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
