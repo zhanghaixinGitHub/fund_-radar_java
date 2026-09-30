@@ -39,6 +39,17 @@ public class InternalSyncJobService implements SyncJobService {
     }
 
     @Override
+    public SyncJobResponse startFundNews(String code) {
+        if(!"002112".equals(code))throw new IllegalArgumentException("请明确指定 002112，近期消息暂仅核对该基金。");
+        return toResponse(aiSyncJobClient.startFundNews(code));
+    }
+    @Override
+    public SyncJobResponse getLatestFundNews() {
+        var result=aiSyncJobClient.getLatestFundNews();
+        return result==null?null:toResponse(result);
+    }
+
+    @Override
     public SyncJobResponse startAll() {
         SyncJobResponse response = toResponse(aiSyncJobClient.startAll());
         LOGGER.info("InternalSyncJobService.startAll   >>> sync batch started, jobId={}, status={}",

@@ -53,7 +53,18 @@ public class SyncJobController {
         return ApiResponse.success(syncJobService.getLatestFundMaterials());
     }
 
-    /** 一键创建七项任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
+    @PostMapping("/fund-news")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startFundNews(@RequestParam(required=false) String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(syncJobService.startFundNews(fundCode)));
+    }
+    @GetMapping("/fund-news/latest")
+    public ApiResponse<SyncJobResponse> latestFundNews() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestFundNews());
+    }
+
+    /** 一键创建全部任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);

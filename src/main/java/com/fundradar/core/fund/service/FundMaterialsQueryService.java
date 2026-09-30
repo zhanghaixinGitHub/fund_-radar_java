@@ -10,6 +10,15 @@ import org.springframework.stereotype.Service;
 public class FundMaterialsQueryService {
     private final AiFundClient client;
     public FundMaterialsQueryService(AiFundClient client) { this.client = client; }
+    public com.fundradar.core.fund.api.FundEvaluationStatusResponse evaluations(String codes) {
+        return client.getEvaluationStatus(codes);
+    }
+    public com.fundradar.core.fund.api.FundNewsFactsResponse news(String code) {
+        return client.getFundNewsFacts(code);
+    }
+    public com.fundradar.core.fund.api.FundRiskSummaryResponse risk(String code) {
+        return client.getFundRiskSummary(code);
+    }
     public FundMaterialsResponse overview(String code, String reportId, String stockCode) {
         return client.getFundMaterials(code, reportId, stockCode);
     }

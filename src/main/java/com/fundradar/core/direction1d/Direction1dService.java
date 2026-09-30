@@ -62,12 +62,18 @@ public class Direction1dService {
         return result;
     }
     public Map<String,Object> generate(String code) {
+        return generate(code,null,UUID.randomUUID());
+    }
+    /** 浏览器明确指定正在查看的目标日；跨过截止时拒绝原请求，不擅自改成下一天。 */
+    public Map<String,Object> generate(String code,LocalDate expectedTarget,UUID requestId) {
         UUID user=user(true); requireFund(user,code);
         JsonNode status=checkedStatus(); JsonNode w=status.path("window");
+        if(expectedTarget!=null&&!expectedTarget.toString().equals(w.path("target_nav_date").asText()))
+            throw new IllegalArgumentException("WINDOW_CHANGED");
         if(!"OPEN".equals(w.path("status").asText())) throw new IllegalArgumentException("MISSED_DEADLINE");
         var coverage=client.coverage(List.of(code)); UUID scope=repo.scope(user,LocalDate.parse(w.path("target_nav_date").asText()),
                 List.of(Map.of("fund_code",code,"coverage",Direction1dPolicy.view(coverage.path("items").get(0)))));
-        return process(user,scope,coverage.path("items").get(0),w);
+        return process(user,scope,coverage.path("items").get(0),w,Duration.ZERO,requestId);
     }
     public JsonNode checkedStatus() {
         JsonNode status=client.get("/status"); Instant now=repo.now();
@@ -82,9 +88,11 @@ public class Direction1dService {
     }
     /** 批量入口可有限等待已确认提交的任务；个人页面和定时检查保持原有快速返回行为。 */
     Map<String,Object> process(UUID user,UUID scope,JsonNode coverage,JsonNode w,Duration waitBudget) {
+        return process(user,scope,coverage,w,waitBudget,scope);
+    }
+    private Map<String,Object> process(UUID user,UUID scope,JsonNode coverage,JsonNode w,Duration waitBudget,UUID requestId) {
         String code=coverage.path("fund_code").asText(); LocalDate target=LocalDate.parse(w.path("target_nav_date").asText());
-        UUID existing=repo.currentPublic(code,target);
-        if(existing!=null) { repo.confirm(existing); repo.link(user,existing,scope); return Map.of("forecastId",existing,"status","PREDICTED","reused",true); }
+        // 即使已有结果也检查当前实际输入；相同输入由 Python 合并，原生成时间保持不变。
         if(coverage.path("group_id").isNull() || coverage.path("group_id").isMissingNode()) {
             String reason=coverage.path("status").asText(); repo.attempt(scope,code,target,null,reason,Direction1dPolicy.view(coverage.path("reason_codes")));
             return Map.of("status",reason);
@@ -102,7 +110,12 @@ public class Direction1dService {
                 return Map.of("status","MODEL_UNAVAILABLE","reason",reason.asText());
             }
         }
-        JsonNode task=client.post("/forecast-jobs",Map.of("fund_code",code)); UUID job=UUID.fromString(task.path("job_id").asText());
+        UUID job=repo.pendingJob(code,target);
+        if(job==null) {
+            JsonNode task=client.post("/forecast-jobs",Map.of("fund_code",code,"expected_target_date",target.toString(),
+                    "request_id",requestId.toString()));
+            job=UUID.fromString(task.path("job_id").asText());
+        }
         JsonNode result=client.get("/forecast-jobs/"+job);
         long waitUntil=System.nanoTime()+waitBudget.toNanos();
         // 只轮询已返回编号的作业，不重复提交POST；超时保留排队/运行状态，不能计为已生成。

@@ -25,6 +25,13 @@ public final class Direction1dPolicy {
         try {
             if(raw.length()>150_000 || !hash(raw).equals(hash)) throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
             JsonNode p=json.readTree(raw);
+            if(p.has("revision_sequence") || p.has("input_identity")) {
+                if(!p.path("revision_sequence").isIntegralNumber() || !p.path("revision_sequence").canConvertToLong()
+                        || p.path("revision_sequence").asLong()<=0
+                        || !p.path("input_identity").asText().matches("[a-f0-9]{64}")
+                        || !p.path("task_key").asText().endsWith(":r"+p.path("revision_sequence").asLong()))
+                    throw new IllegalArgumentException("INVALID_REVISION");
+            }
             boolean ternary=ACTIVE_PROTOCOL.equals(p.path("protocol").asText());
             if((!ternary&&!PROTOCOL.equals(p.path("protocol").asText())) || p.path("horizon_trading_days").asInt()!=1
                     || !(ternary?THREE_STATE_TARGET:"UNIT_NAV_DIRECTION_V1").equals(p.path("target_definition").asText())

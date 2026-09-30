@@ -19,6 +19,7 @@ class FundMaterialsSyncTests {
     @Test void rejectsMissingBlankAndUnsupportedScope() {
         for (String code : new String[]{null, "", " ", "008888", "002112.OF"}) {
             assertThrows(IllegalArgumentException.class, () -> service.startFundMaterials(code));
+            assertThrows(IllegalArgumentException.class, () -> service.startFundNews(code));
         }
         verifyNoInteractions(client);
     }
@@ -27,10 +28,14 @@ class FundMaterialsSyncTests {
         SyncJobService delegate = mock(SyncJobService.class);
         SyncJobController controller = new SyncJobController(delegate);
         assertThrows(RuntimeException.class, () -> controller.startFundMaterials("002112"));
+        assertThrows(RuntimeException.class, () -> controller.startFundNews("002112"));
         CurrentUserContext.set(new AuthenticatedUser(UUID.randomUUID(), "13900000000", "测试",
                 AccountRole.FUND_USER, Set.of(PermissionCode.SYNC_JOB_READ)));
         assertThrows(RuntimeException.class, () -> controller.startFundMaterials("002112"));
         verifyNoInteractions(delegate);
+        assertThrows(RuntimeException.class, () -> controller.startFundNews("002112"));
+        controller.latestFundNews();
+        verify(delegate).getLatestFundNews();
         controller.getLatestFundMaterials();
         verify(delegate).getLatestFundMaterials();
     }
@@ -42,6 +47,8 @@ class FundMaterialsSyncTests {
                 AccountRole.FUND_USER, Set.of(PermissionCode.SYNC_JOB_START)));
         assertEquals(202, controller.startFundMaterials("002112").getStatusCode().value());
         verify(delegate, times(1)).startFundMaterials("002112");
+        assertEquals(202, controller.startFundNews("002112").getStatusCode().value());
+        verify(delegate, times(1)).startFundNews("002112");
     }
 
     @Test void latestStateMayBeAbsentWithoutTriggeringWork() {

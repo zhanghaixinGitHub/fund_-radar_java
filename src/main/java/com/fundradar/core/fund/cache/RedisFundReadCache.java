@@ -31,6 +31,8 @@ public class RedisFundReadCache {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisFundReadCache.class);
     private static final String KEY_PREFIX = "fund-radar:v1:read-model:";
+    /** 只隔离变更收益口径的列表与详情；旧缓存保留到期，不混作单位净值变化。 */
+    private static final String NAV_CHANGE_PREFIX = KEY_PREFIX + "unit-nav-change-v2:";
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -151,13 +153,13 @@ public class RedisFundReadCache {
 
     /** 生成基金列表缓存键，关键字、类型、游标和页码均隔离，避免不同筛选结果串页。 */
     private String pageKey(String keyword, String fundType, int pageSize, String cursor, Integer page) {
-        return KEY_PREFIX + "page:k=" + encode(normalize(keyword)) + ":t=" + encode(normalize(fundType)) + ":s=" + pageSize
+        return NAV_CHANGE_PREFIX + "page:k=" + encode(normalize(keyword)) + ":t=" + encode(normalize(fundType)) + ":s=" + pageSize
                 + ":c=" + encode(normalize(cursor)) + ":p=" + (page == null ? "" : page);
     }
 
     /** 生成按基金代码隔离的详情缓存键。 */
     private String detailKey(String fundCode) {
-        return KEY_PREFIX + "detail:" + fundCode;
+        return NAV_CHANGE_PREFIX + "detail:" + fundCode;
     }
 
     /** 生成基金与日期窗口共同隔离的历史净值缓存键。 */

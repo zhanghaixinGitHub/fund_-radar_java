@@ -110,6 +110,8 @@ class DecisionServiceV2IntegrationTests {
         assertEquals(first.path("decision"),result.path("system").path("curve").get(0).path("action"));
         assertEquals(second.path("decision"),result.path("system").path("curve").get(1).path("action"));
         assertEquals(result.path("system").path("initialCash"),result.path("buyHold").path("initialCash"));
+        assertEquals(5,result.path("exposureControls").size());
+        assertTrue(result.path("execution").has("unexecutedTradeDays"));
         assertEquals(first,service.report("123456",UUID.fromString(first.path("reportId").asText())));
         assertThrows(NoSuchElementException.class,()->effects.read(new IssuedAdviceEffectService.Request("999999",start,end)));
         assertEquals(1,db.sql("SELECT count(*) FROM advice_effect_evidence WHERE user_id=:u").param("u",owner).query(Integer.class).single());

@@ -88,16 +88,30 @@ public class Direction1dRepository {
     public UUID currentPublic(String code,LocalDate target) {
         return currentPublic(code,target,Direction1dPolicy.ACTIVE_PROTOCOL);
     }
+    /** 续接最近一次公共计算，防止异步任务完成后因下一轮换请求编号而丢失保存机会。 */
+    public UUID pendingJob(String code,LocalDate target) {
+        return db.sql("""
+          SELECT source_job_id FROM (
+            SELECT source_job_id,status FROM direction_1d_attempt
+            WHERE fund_code=:code AND target_nav_date=:target AND source_job_id IS NOT NULL
+            ORDER BY attempted_at DESC,attempt_id DESC LIMIT 1
+          ) latest WHERE status IN ('QUEUED','RUNNING')
+          """).param("code",code).param("target",target).query(UUID.class).optional().orElse(null);
+    }
     private UUID currentPublic(String code,LocalDate target,String protocol) {
-        return db.sql("SELECT forecast_id FROM direction_1d_forecast WHERE fund_code=:code AND target_nav_date=:target AND protocol=:protocol ORDER BY stored_at LIMIT 1")
+        return db.sql("SELECT forecast_id FROM direction_1d_current WHERE fund_code=:code AND target_nav_date=:target AND protocol=:protocol")
                 .param("code",code).param("target",target).param("protocol",protocol).query(UUID.class).optional().orElse(null);
     }
     /** 最新日期同日并存两版时优先三分类；历史游标排序不改变，旧记录仍完整保留。 */
     public Map<String,Object> currentHistory(UUID user,String code) {
         UUID id=db.sql("""
           SELECT f.forecast_id FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
-          WHERE u.user_id=:user AND f.fund_code=:code
-          ORDER BY f.target_nav_date DESC,(f.protocol=:protocol) DESC,f.stored_at DESC,f.forecast_id DESC LIMIT 1
+          JOIN direction_1d_forecast_receipt r USING(forecast_id)
+          LEFT JOIN direction_1d_current c ON c.protocol=f.protocol AND c.fund_code=f.fund_code
+            AND c.target_nav_date=f.target_nav_date
+          WHERE u.user_id=:user AND f.fund_code=:code AND r.status='VERIFIED'
+          ORDER BY f.target_nav_date DESC,(f.protocol=:protocol) DESC,
+            (c.forecast_id=f.forecast_id) DESC NULLS LAST,f.revision_sequence DESC,f.stored_at DESC,f.forecast_id DESC LIMIT 1
           """).param("user",user).param("code",code).param("protocol",Direction1dPolicy.ACTIVE_PROTOCOL)
                 .query(UUID.class).optional().orElse(null);
         return Map.of("items",id==null?List.of():List.of(detail(user,id)),"page",1,"pageSize",1,"totalCount",id==null?0:1);
@@ -107,26 +121,56 @@ public class Direction1dRepository {
     public ArchivedForecast archive(UUID job,String raw,String hash,String expectedCode) {
         JsonNode p=Direction1dPolicy.validate(json,raw,hash,expectedCode,now());
         ArchivedForecast saved=tx.execute(ignored->{
-            db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key,721109))").param("key",p.path("task_key").asText()).query((r,n)->0).list();
-            UUID existing=currentPublic(expectedCode,LocalDate.parse(p.path("target_nav_date").asText()),p.path("protocol").asText());
+            String scopeKey=p.path("protocol").asText()+":"+expectedCode+":"+p.path("target_nav_date").asText();
+            db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key,721109))").param("key",scopeKey).query((r,n)->0).list();
+            UUID existing=db.sql("""
+              SELECT forecast_id FROM direction_1d_forecast WHERE fund_code=:code
+                AND target_nav_date=:target AND protocol=:protocol AND content_hash=:hash
+              ORDER BY stored_at LIMIT 1
+              """).param("code",expectedCode).param("target",LocalDate.parse(p.path("target_nav_date").asText()))
+                .param("protocol",p.path("protocol").asText()).param("hash",hash).query(UUID.class).optional().orElse(null);
             if(existing!=null) return new ArchivedForecast(existing,false);
+            if(!now().isBefore(Direction1dPolicy.instant(p,"deadline_at")))
+                throw new IllegalArgumentException("MISSED_DEADLINE");
             UUID id=UUID.randomUUID();
             db.sql("""
               INSERT INTO direction_1d_forecast(forecast_id,source_job_id,protocol,cohort_id,fund_code,base_nav_date,target_nav_date,
-                calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at)
-              VALUES(:id,:job,:protocol,:cohort,:code,:base,:target,:calendar,:open,:deadline,:raw,CAST(:raw AS jsonb),:input,:hash,:generated)
+                calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at,
+                revision_sequence,input_identity)
+              VALUES(:id,:job,:protocol,:cohort,:code,:base,:target,:calendar,:open,:deadline,:raw,CAST(:raw AS jsonb),
+                :input,:hash,:generated,:sequence,:identity)
               """).param("id",id).param("job",job).param("protocol",p.path("protocol").asText()).param("cohort",p.path("cohort_id").asText())
                     .param("code",expectedCode).param("base",LocalDate.parse(p.path("base_nav_date").asText()))
                     .param("target",LocalDate.parse(p.path("target_nav_date").asText())).param("calendar",p.path("calendar_version").asText())
                     .param("open",Timestamp.from(Direction1dPolicy.instant(p,"window_open_at")))
                     .param("deadline",Timestamp.from(Direction1dPolicy.instant(p,"deadline_at"))).param("raw",raw)
                     .param("input",p.path("input_hash").asText()).param("hash",hash)
-                    .param("generated",Timestamp.from(Direction1dPolicy.instant(p,"generated_at"))).update();
+                    .param("generated",Timestamp.from(Direction1dPolicy.instant(p,"generated_at")))
+                    .param("sequence",p.path("revision_sequence").asLong(0))
+                    .param("identity",p.path("input_identity").asText(null)).update();
             for(JsonNode b:p.path("branches")) saveScore(id,b,false);
             for(JsonNode b:p.path("baselines")) saveScore(id,b,true);
             return new ArchivedForecast(id,true);
         });
-        confirm(saved.forecastId()); return saved;
+        confirm(saved.forecastId());
+        promote(saved.forecastId());
+        UUID current=currentPublic(expectedCode,LocalDate.parse(p.path("target_nav_date").asText()),p.path("protocol").asText());
+        if(current==null) throw new IllegalArgumentException("MISSED_DEADLINE");
+        return current.equals(saved.forecastId())?saved:new ArchivedForecast(current,false);
+    }
+
+    /** 已提交原文和回执均成功后才切换引用；数据库触发器再次检查截止和单调顺序。 */
+    public void promote(UUID id) {
+        tx.executeWithoutResult(ignored->db.sql("""
+          INSERT INTO direction_1d_current(protocol,fund_code,target_nav_date,forecast_id,revision_sequence)
+          SELECT f.protocol,f.fund_code,f.target_nav_date,f.forecast_id,f.revision_sequence
+          FROM direction_1d_forecast f JOIN direction_1d_forecast_receipt r USING(forecast_id)
+          WHERE f.forecast_id=:id AND r.status='VERIFIED' AND clock_timestamp()<f.deadline_at
+            AND r.content_hash=f.content_hash
+          ON CONFLICT(protocol,fund_code,target_nav_date) DO UPDATE
+            SET forecast_id=EXCLUDED.forecast_id,revision_sequence=EXCLUDED.revision_sequence,selected_at=clock_timestamp()
+            WHERE EXCLUDED.revision_sequence>direction_1d_current.revision_sequence
+          """).param("id",id).update());
     }
     private void saveScore(UUID id,JsonNode b,boolean baseline) {
         db.sql("""
@@ -242,7 +286,16 @@ public class Direction1dRepository {
         return out;
     }
     public List<Map<String,Object>> metrics(UUID user) {
+        // 兼容旧调用，同一基金每日只统计最后一次有效输入，更新次数不扩大样本数。
         return db.sql("""
+          WITH ranked AS (
+            SELECT f.forecast_id,row_number() OVER(PARTITION BY f.protocol,f.fund_code,f.target_nav_date
+              ORDER BY f.revision_sequence DESC,f.stored_at DESC,f.forecast_id DESC) AS choice
+            FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+            JOIN direction_1d_forecast_receipt r USING(forecast_id)
+            WHERE u.user_id=:u AND r.status='VERIFIED' AND r.content_hash=f.content_hash
+              AND encode(sha256(convert_to(f.payload_json,'UTF8')),'hex')=f.content_hash
+              AND f.generated_at<f.deadline_at AND f.stored_at<f.deadline_at AND r.receipt_verified_at<f.deadline_at)
           SELECT f.protocol,s.branch_id,count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS assessed_count,
             count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL AND
               CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
@@ -252,9 +305,10 @@ public class Direction1dRepository {
             count(*) FILTER(WHERE o.actual_direction='FLAT') AS flat_count,
             count(*) FILTER(WHERE r.status<>'VERIFIED' OR r.status IS NULL) AS late_or_unverified_count
           FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
+          JOIN ranked picked USING(forecast_id)
           JOIN direction_1d_forecast_score s USING(forecast_id) LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
           LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
-          WHERE u.user_id=:u AND s.status='AVAILABLE' GROUP BY f.protocol,s.branch_id ORDER BY f.protocol,s.branch_id
+          WHERE u.user_id=:u AND picked.choice=1 AND s.status='AVAILABLE' GROUP BY f.protocol,s.branch_id ORDER BY f.protocol,s.branch_id
           """).param("u",user).query().listOfRows();
     }
     public void health(String state,int checked,int failed,String message,boolean finish) {

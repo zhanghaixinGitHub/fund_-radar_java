@@ -59,6 +59,28 @@ public class AiSyncJobClient {
         } catch (RuntimeException error) { throw unavailable(error); }
     }
 
+    /** 近期消息使用独立入口；不重试 POST，避免超时后扩大外部访问次数。 */
+    public AiSyncJobStatus startFundNews(String code) {
+        try {
+            var result=restClient.post().uri(builder -> builder.path("/internal/v1/funds/sync-jobs/fund-news")
+                    .queryParam("fundCode",code).build()).header(SERVICE_TOKEN_HEADER,properties.getToken())
+                    .header(TRACE_ID_HEADER,TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+            if(result==null)throw new AiServiceUnavailableException("empty news sync response",null);
+            return result;
+        } catch(RestClientResponseException error) {
+            if(error.getStatusCode().value()==409)throw new MarketNavSyncInProgressException("sync in progress",error);
+            throw unavailable(error);
+        } catch(AiServiceUnavailableException | MarketNavSyncInProgressException error) {throw error;}
+        catch(RuntimeException error) {throw unavailable(error);}
+    }
+    public AiSyncJobStatus getLatestFundNews() {
+        try {
+            return restClient.get().uri("/internal/v1/funds/sync-jobs/fund-news/latest")
+                    .header(SERVICE_TOKEN_HEADER,properties.getToken()).header(TRACE_ID_HEADER,TraceContext.getTraceId())
+                    .retrieve().body(AiSyncJobStatus.class);
+        } catch(RuntimeException error) {throw unavailable(error);}
+    }
+
     /** 创建后台串行批次；不重试 POST，避免网络超时时重复触发外部同步。 */
     public AiSyncJobStatus startAll() {
         try {

@@ -14,11 +14,31 @@ public class Direction1dStatistics {
         return read(user,start,end,"FIRST_OBSERVED");
     }
     public Map<String,Object> read(UUID user,LocalDate start,LocalDate end,String labelBasis) {
+        return read(user,start,end,labelBasis,"LAST_VALID");
+    }
+    /** 先固定每基金每日的首次或最后有效预测，再核对答案，不能事后挑最准的版本。 */
+    public Map<String,Object> read(UUID user,LocalDate start,LocalDate end,String labelBasis,String predictionBasis) {
+        if(!Set.of("FIRST_VALID","LAST_VALID").contains(predictionBasis))throw new IllegalArgumentException("INVALID_PREDICTION_BASIS");
         if(!Set.of("FIRST_OBSERVED","LATEST_REVISION").contains(labelBasis))throw new IllegalArgumentException("INVALID_LABEL_BASIS");
         String answer="FIRST_OBSERVED".equals(labelBasis)?"1":"(SELECT max(revision_no) FROM direction_1d_outcome WHERE forecast_id=f.forecast_id)";
         if(start.isAfter(end))throw new IllegalArgumentException("INVALID_RANGE");
-        String rows="""
-          WITH raw AS (
+        String order="FIRST_VALID".equals(predictionBasis)?"ASC":"DESC";
+        // 排序方向仅由上方白名单产生；用户输入不拼接进 SQL。
+        String selection="""
+          WITH selected AS (
+            SELECT forecast_id FROM (
+              SELECT f.forecast_id,row_number() OVER(PARTITION BY f.protocol,f.fund_code,f.target_nav_date
+                ORDER BY f.revision_sequence %s,f.stored_at %s,f.forecast_id %s) AS choice
+              FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+              JOIN direction_1d_forecast_receipt r USING(forecast_id)
+              WHERE u.user_id=:u AND f.target_nav_date BETWEEN :start AND :end AND r.status='VERIFIED'
+                AND r.content_hash=f.content_hash AND encode(sha256(convert_to(f.payload_json,'UTF8')),'hex')=f.content_hash
+                AND f.generated_at<f.deadline_at AND f.stored_at<f.deadline_at AND r.receipt_verified_at<f.deadline_at
+            ) ranked WHERE choice=1
+          )
+          """.formatted(order,order,order);
+        String rows=selection+"""
+          , raw AS (
             SELECT f.protocol,f.forecast_id,f.fund_code,f.target_nav_date,s.branch_id,s.model_id,s.predicted_direction,
               CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
                 ELSE (s.predicted_direction='UP')=(o.y=1) END AS correct,
@@ -31,6 +51,7 @@ public class Direction1dStatistics {
               count(*) FILTER(WHERE r.status='VERIFIED' AND s.status='AVAILABLE' AND o.y IS NOT NULL)
                 OVER(PARTITION BY f.protocol,s.branch_id,f.target_nav_date,f.payload->>'product_family_id') AS family_shares
             FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
+            JOIN selected USING(forecast_id)
             JOIN direction_1d_forecast_score s USING(forecast_id)
             LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
             LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
@@ -63,7 +84,7 @@ public class Direction1dStatistics {
           FROM expanded GROUP BY protocol,kind,key,branch_id ORDER BY CASE WHEN kind='TOTAL' THEN 0 ELSE 1 END,protocol,kind,key,branch_id LIMIT 1001
           """;
         var all=db.sql(rows.replace("o.revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().listOfRows();
-        var pairs=db.sql("""
+        var pairs=db.sql(selection+"""
           SELECT count(*) FILTER(WHERE a.status='AVAILABLE' AND b.status='AVAILABLE') AS paired_count,
             count(*) FILTER(WHERE a.status='AVAILABLE' AND b.status<>'AVAILABLE') AS fixed_only_count,
             count(*) FILTER(WHERE a.status<>'AVAILABLE' AND b.status='AVAILABLE') AS weekly_only_count,
@@ -72,6 +93,7 @@ public class Direction1dStatistics {
               (CASE WHEN b.predicted_direction=o.actual_direction THEN 1 ELSE 0 END)
               -(CASE WHEN a.predicted_direction=o.actual_direction THEN 1 ELSE 0 END) END) AS weekly_extra_correct
           FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
+          JOIN selected USING(forecast_id)
           JOIN direction_1d_forecast_receipt r USING(forecast_id)
           JOIN direction_1d_forecast_score a ON a.forecast_id=f.forecast_id AND a.branch_id='FIXED'
           JOIN direction_1d_forecast_score b ON b.forecast_id=f.forecast_id AND b.branch_id='WEEKLY'
@@ -92,12 +114,14 @@ public class Direction1dStatistics {
             count(*) FILTER(WHERE status='FAILED') AS failed_count,
             (SELECT count(DISTINCT (f.fund_code,f.target_nav_date)) FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
               JOIN direction_1d_forecast_receipt r USING(forecast_id)
-              WHERE u.user_id=:u AND r.status='VERIFIED' AND f.target_nav_date BETWEEN :start AND :end) AS verified_forecast_count
+              WHERE u.user_id=:u AND r.status='VERIFIED' AND r.content_hash=f.content_hash
+                AND f.generated_at<f.deadline_at AND f.stored_at<f.deadline_at AND r.receipt_verified_at<f.deadline_at
+                AND f.target_nav_date BETWEEN :start AND :end) AS verified_forecast_count
           FROM attempted
           """).param("u",user).param("start",start).param("end",end).query().singleRow();
         return Map.of("branches",all.stream().filter(r->"TOTAL".equals(r.get("kind"))).toList(),
                 "strata",all.stream().filter(r->!"TOTAL".equals(r.get("kind"))).limit(1000).toList(),"strataTruncated",all.size()>1000,
-                "paired",pairs,"coverage",coverage,"startDate",start,"endDate",end,"labelBasis",labelBasis,
+                "paired",pairs,"coverage",coverage,"startDate",start,"endDate",end,"labelBasis",labelBasis,"predictionBasis",predictionBasis,
                 "observationNote","少于20个不同目标日属于很短观察期；60日后才适合更完整分析，均不自动发布。");
     }
 }

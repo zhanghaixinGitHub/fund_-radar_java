@@ -17,8 +17,9 @@ import java.util.*;
 public class IssuedAdviceEffectService {
     private final JdbcClient db;private final ObjectMapper json;private final MultiPredictionClient client;
     private final DecisionServiceV2 decisions;private final StrategyReplayEngine engine;
-    public IssuedAdviceEffectService(JdbcClient db,ObjectMapper json,MultiPredictionClient client,DecisionServiceV2 decisions,StrategyReplayEngine engine) {
-        this.db=db;this.json=json;this.client=client;this.decisions=decisions;this.engine=engine;
+    private final StrategyReplayComparison comparisons;
+    public IssuedAdviceEffectService(JdbcClient db,ObjectMapper json,MultiPredictionClient client,DecisionServiceV2 decisions,StrategyReplayEngine engine,StrategyReplayComparison comparisons) {
+        this.db=db;this.json=json;this.client=client;this.decisions=decisions;this.engine=engine;this.comparisons=comparisons;
     }
     public record Request(String fundCode,LocalDate startDate,LocalDate endDate) {}
     public JsonNode read(Request request) {
@@ -69,8 +70,13 @@ public class IssuedAdviceEffectService {
             result.put("actualStartDate",firstAction.toString());result.put("leadingDaysWithoutReports",leading);
             result.put("missingReportDays",frames.size()-actions.size());
             var identities=result.putArray("reportSequence");sequence.values().forEach(identities::add);
-            result.set("system",json.valueToTree(engine.run(frames,config,"ISSUED_ADVICE",actions)));
+            // 同一组原建议、日期和费用生成策略与五档对照；原报告不改写，新证据仍追加保存。
+            var comparison=comparisons.run(frames,config,"ISSUED_ADVICE",actions);
+            result.set("system",json.valueToTree(comparison.strategy()));
             result.set("buyHold",json.valueToTree(engine.run(frames,config,"BUY_HOLD")));
+            result.set("execution",json.valueToTree(comparison.execution()));
+            result.set("exposureControls",json.valueToTree(comparison.controls()));
+            result.set("comparisonLimitations",json.valueToTree(comparison.limitations()));
             result.put("inputHash",input.path("inputHash").asText());result.put("status","SUCCEEDED");
             String hash=Direction1dPolicy.hash(result.toString());result.put("evidenceHash",hash);
             db.sql("""

@@ -66,6 +66,30 @@ public class FundMaterialsController {
         return ApiResponse.success(materials.overview(fundCode, reportId, stockCode));
     }
 
+    /** 只提供公共基金事实；仍由服务端验证登录和基金查看权限。 */
+    @GetMapping("/{fundCode}/risk-summary")
+    public ApiResponse<FundRiskSummaryResponse> risk(
+            @PathVariable @Pattern(regexp = "^[0-9]{6}$") String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(materials.risk(fundCode));
+    }
+
+    /** 公告仅含公共基金信息，仍要求登录与基金读取权限。 */
+    @GetMapping("/{fundCode}/news-facts")
+    public ApiResponse<FundNewsFactsResponse> news(
+            @PathVariable @Pattern(regexp = "^[0-9]{6}$") String fundCode) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(materials.news(fundCode));
+    }
+
+    /** 单次最多 100 只基金，允许未覆盖项明确返回未知；服务端仍执行认证与读权限。 */
+    @GetMapping("/evaluation-status")
+    public ApiResponse<FundEvaluationStatusResponse> evaluations(
+            @RequestParam @Pattern(regexp = "^[0-9]{6}(,[0-9]{6}){0,99}$") String fundCodes) {
+        CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
+        return ApiResponse.success(materials.evaluations(fundCodes));
+    }
+
     @GetMapping("/{fundCode}/materials/documents")
     public ApiResponse<FundDocumentsResponse> documents(
             @PathVariable @Pattern(regexp = "^[0-9]{6}$") String fundCode,

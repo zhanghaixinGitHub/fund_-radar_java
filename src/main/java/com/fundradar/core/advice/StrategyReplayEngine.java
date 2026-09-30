@@ -44,9 +44,19 @@ public class StrategyReplayEngine {
         return run(frames,config,mode,Map.of());
     }
     public Result run(List<Frame> frames,Config config,String mode,Map<LocalDate,IssuedDecision> issued) {
+        return run(frames,config,mode,issued,null);
+    }
+    /** 固定初始投入比例后一直持有，其余现金不投资；比例必须在观察结果之前固定。不是每日再平衡。 */
+    public Result runInitialExposureControl(List<Frame> frames,Config config,BigDecimal initialRatio) {
+        if(initialRatio==null || initialRatio.signum()<0 || initialRatio.compareTo(BigDecimal.ONE)>0)
+            throw new IllegalArgumentException("初始投入比例应在0至1之间");
+        return run(frames,config,"INITIAL_EXPOSURE_CONTROL",Map.of(),initialRatio);
+    }
+    private Result run(List<Frame> frames,Config config,String mode,Map<LocalDate,IssuedDecision> issued,BigDecimal controlRatio) {
         if(frames.isEmpty()||frames.size()>3000||config.initialCash().signum()<=0
             ||config.confirmationSessions()<1||config.cashArrivalSessions()<1) throw new IllegalArgumentException("回放范围或资金规则不正确");
-        if(!Set.of("V2","BUY_HOLD","ISSUED_ADVICE").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
+        if(!Set.of("V2","BUY_HOLD","ISSUED_ADVICE","INITIAL_EXPOSURE_CONTROL").contains(mode)) throw new IllegalArgumentException("回放模式不正确");
+        if(mode.equals("INITIAL_EXPOSURE_CONTROL") && controlRatio==null) throw new IllegalArgumentException("缺少事前固定的初始投入比例");
         if(config.buyFee()==null||config.buyFee().signum()<0||config.buyFee().compareTo(BigDecimal.ONE)>=0||config.redemptionFees().isEmpty())
             throw new IllegalArgumentException("费用配置不正确");
         int nextDay=0;
@@ -86,6 +96,7 @@ public class StrategyReplayEngine {
             String action=decision==null?null:decision.decision();
             String executionVersion=VERSION;
             if(mode.equals("BUY_HOLD")) action=index==0?"BUY":"HOLD";
+            if(mode.equals("INITIAL_EXPOSURE_CONTROL")) action=index==0 && controlRatio.signum()>0?"BUY":"HOLD";
             if(mode.equals("ISSUED_ADVICE")) {
                 var saved=issued.get(frame.date());
                 action=saved==null?"NO_REPORT":saved.action();
@@ -100,6 +111,7 @@ public class StrategyReplayEngine {
             if("BUY".equals(action)||"ADD".equals(action)) {
                 boolean pendingBuy=false;for(var lot:lots) if(lot.available>index) pendingBuy=true;
                 BigDecimal ratio=mode.equals("BUY_HOLD")?BigDecimal.ONE:policy.positionRatio(action,executionVersion);
+                if(mode.equals("INITIAL_EXPOSURE_CONTROL")) ratio=controlRatio;
                 BigDecimal budget=pendingBuy?ZERO:cash.multiply(ratio,MC);
                 if(pendingBuy) notes.add("同向买入份额未确认，保留判断但不重复买入");
                 if(budget.compareTo(new BigDecimal("0.01"))>=0) {
@@ -139,11 +151,11 @@ public class StrategyReplayEngine {
             if(shares.signum()>0) invested++; else empty++;
             curve.add(new Point(frame.date(),equity,cash,receivable,shares,action,
                     mode.equals("ISSUED_ADVICE")?(issued.containsKey(frame.date())?issued.get(frame.date()).contentHash():"NO_REPORT"):
-                    com.fundradar.core.direction1d.Direction1dPolicy.hash(decision==null?"BUY_HOLD_V1":decision.toString())));
+                    com.fundradar.core.direction1d.Direction1dPolicy.hash(mode.equals("INITIAL_EXPOSURE_CONTROL")?"INITIAL_EXPOSURE_CONTROL_V1:"+controlRatio.toPlainString():decision==null?"BUY_HOLD_V1":decision.toString())));
         }
         BigDecimal end=curve.get(curve.size()-1).equity();
         String actualVersion=mode.equals("ISSUED_ADVICE")?issued.values().stream().map(IssuedDecision::strategyVersion).distinct().sorted().collect(java.util.stream.Collectors.joining("+")):
-                mode.equals("BUY_HOLD")?"BUY_HOLD_V1":VERSION;
+                mode.equals("BUY_HOLD")?"BUY_HOLD_V1":mode.equals("INITIAL_EXPOSURE_CONTROL")?"INITIAL_EXPOSURE_CONTROL_V1":VERSION;
         return new Result(config.version(),actualVersion,mode,config.initialCash(),end,end.divide(config.initialCash(),MC).doubleValue()-1,
                 drawdown,turnover.divide(config.initialCash(),MC).doubleValue(),trades.size(),fees,invested,empty,
                 List.copyOf(trades),List.copyOf(curve),config.assumption(),List.copyOf(notes),exitReviews(frames,trades));

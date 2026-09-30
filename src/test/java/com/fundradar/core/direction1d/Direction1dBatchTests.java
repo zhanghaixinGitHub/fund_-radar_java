@@ -20,7 +20,7 @@ class Direction1dBatchTests {
     final Direction1dBatchService batch=new Direction1dBatchService(repo,service,client);
     final LocalDate target=LocalDate.of(2026,9,23);
     @AfterEach void clear(){CurrentUserContext.clear();}
-    @Test void waitsForRequiredNavAndReusesOriginalBeforeCheckingNewModel() throws Exception {
+    @Test void newInputFailureDoesNotClaimOldForecastIsAnUpdate() throws Exception {
         var actual=new Direction1dService(repo,client);UUID user=UUID.randomUUID(),scopeId=UUID.randomUUID();
         var w=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
         var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[\"NAV_CURRENT_NOT_READY\"]}");
@@ -28,8 +28,8 @@ class Direction1dBatchTests {
         assertEquals("WAITING_DATA",waiting.get("status"));
         assertEquals("NAV_CURRENT_NOT_READY",waiting.get("reason"));verifyNoInteractions(client);
         UUID existing=UUID.randomUUID();when(repo.currentPublic("008888",target)).thenReturn(existing);
-        assertEquals(Map.of("forecastId",existing,"status","PREDICTED","reused",true),actual.process(user,scopeId,coverage,w));
-        verifyNoInteractions(client);verify(repo).confirm(existing);verify(repo).link(user,existing,scopeId);
+        assertEquals("WAITING_DATA",actual.process(user,scopeId,coverage,w).get("status"));
+        verifyNoInteractions(client);verify(repo,never()).confirm(existing);verify(repo,never()).link(user,existing,scopeId);
     }
 
     @Test void oneFundFollowedByTwoUsersCountsOneCreationAndLinksBoth() throws Exception {
@@ -83,10 +83,14 @@ class Direction1dBatchTests {
         var state=json.createObjectNode().put("server_time",Instant.now().toString()).put("database_time",Instant.now().toString());
         state.putObject("window").put("target_nav_date","2026-09-23").put("status","OPEN");
         when(client.get("/status")).thenReturn(state);
-        when(client.coverage(List.of("008888"))).thenReturn(json.readTree("{\"items\":[{\"fund_code\":\"008888\"}]}"));
-        UUID forecast=UUID.randomUUID();when(repo.currentPublic("008888",target)).thenReturn(forecast);
-        assertEquals("PREDICTED",actual.generate("008888").get("status"));
-        verify(repo).confirm(forecast);
+        when(client.coverage(List.of("008888"))).thenReturn(json.readTree("{\"items\":[{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\"}]}"));
+        UUID job=UUID.randomUUID(),request=UUID.randomUUID();
+        when(client.post(eq("/forecast-jobs"),anyMap())).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"QUEUED\"}"));
+        assertEquals("QUEUED",actual.generate("008888",target,request).get("status"));
+        verify(client).post("/forecast-jobs",Map.of("fund_code","008888","expected_target_date",target.toString(),"request_id",request.toString()));
+        assertEquals("WINDOW_CHANGED",assertThrows(IllegalArgumentException.class,
+                ()->actual.generate("008888",target.minusDays(1),UUID.randomUUID())).getMessage());
         ((com.fasterxml.jackson.databind.node.ObjectNode)state.path("window")).put("status","MISSED_DEADLINE");
         assertEquals("MISSED_DEADLINE",assertThrows(IllegalArgumentException.class,()->actual.generate("008888")).getMessage());
     }
@@ -96,7 +100,7 @@ class Direction1dBatchTests {
         UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID(),forecast=UUID.randomUUID();
         var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
         var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
-        when(client.post("/forecast-jobs",Map.of("fund_code","008888"))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.post("/forecast-jobs",Map.of("fund_code","008888","expected_target_date",target.toString(),"request_id",scope.toString()))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
         when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"SUCCEEDED\",\"result\":{\"payload_json\":\"raw\",\"content_hash\":\"hash\"}}"));
         // 初次查无档案，但持锁事务发现另一任务已完成相同目标日的保存。
         when(repo.archive(job,"raw","hash","008888")).thenReturn(new Direction1dRepository.ArchivedForecast(forecast,false));
@@ -110,13 +114,13 @@ class Direction1dBatchTests {
         UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID(),forecast=UUID.randomUUID();
         var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
         var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
-        when(client.post("/forecast-jobs",Map.of("fund_code","008888"))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.post("/forecast-jobs",Map.of("fund_code","008888","expected_target_date",target.toString(),"request_id",scope.toString()))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
         when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"QUEUED\"}"),
                 json.readTree("{\"state\":\"RUNNING\"}"),
                 json.readTree("{\"state\":\"SUCCEEDED\",\"result\":{\"payload_json\":\"raw\",\"content_hash\":\"hash\"}}"));
         when(repo.archive(job,"raw","hash","008888")).thenReturn(new Direction1dRepository.ArchivedForecast(forecast,true));
         assertEquals(false,actual.process(user,scope,coverage,window,Duration.ofSeconds(5)).get("reused"));
-        verify(client,times(1)).post("/forecast-jobs",Map.of("fund_code","008888"));
+        verify(client,times(1)).post("/forecast-jobs",Map.of("fund_code","008888","expected_target_date",target.toString(),"request_id",scope.toString()));
         verify(repo).link(user,forecast,scope);
     }
 
@@ -125,7 +129,7 @@ class Direction1dBatchTests {
         UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID();
         var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
         var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
-        when(client.post("/forecast-jobs",Map.of("fund_code","008888"))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
+        when(client.post("/forecast-jobs",Map.of("fund_code","008888","expected_target_date",target.toString(),"request_id",scope.toString()))).thenReturn(json.createObjectNode().put("job_id",job.toString()));
         when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"RUNNING\"}"));
         assertEquals("RUNNING",actual.process(user,scope,coverage,window,Duration.ofMillis(1)).get("status"));
         verify(repo,never()).archive(any(),any(),any(),any());
@@ -133,5 +137,18 @@ class Direction1dBatchTests {
         ((com.fasterxml.jackson.databind.node.ObjectNode)window).put("status","MISSED_DEADLINE");
         assertEquals("MISSED_DEADLINE",actual.process(user,scope,coverage,window,Duration.ofSeconds(30)).get("status"));
         verifyNoInteractions(client);
+    }
+
+    @Test void nextScheduledCheckFinishesPendingJobWithoutCreatingAnother() throws Exception {
+        var actual=new Direction1dService(repo,client);
+        UUID user=UUID.randomUUID(),scope=UUID.randomUUID(),job=UUID.randomUUID(),forecast=UUID.randomUUID();
+        var coverage=json.readTree("{\"fund_code\":\"008888\",\"group_id\":\"CN_EQUITY\",\"reason_codes\":[]}");
+        var window=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");
+        when(repo.pendingJob("008888",target)).thenReturn(job);
+        when(client.get("/forecast-jobs/"+job)).thenReturn(json.readTree("{\"state\":\"SUCCEEDED\",\"result\":{\"payload_json\":\"raw\",\"content_hash\":\"hash\"}}"));
+        when(repo.archive(job,"raw","hash","008888")).thenReturn(new Direction1dRepository.ArchivedForecast(forecast,true));
+        assertEquals("PREDICTED",actual.process(user,scope,coverage,window).get("status"));
+        verify(client,never()).post(anyString(),anyMap());
+        verify(repo).link(user,forecast,scope);
     }
 }

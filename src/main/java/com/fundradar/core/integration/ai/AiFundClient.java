@@ -27,6 +27,24 @@ import java.util.List;
 @Service
 public class AiFundClient {
 
+    /** 同页基金共用一个来源审计批次，避免逐行调用 Python。 */
+    public com.fundradar.core.fund.api.FundEvaluationStatusResponse getEvaluationStatus(String codes) {
+        return readMaterials(builder -> builder.path("/internal/v1/funds/evaluation-status")
+                .queryParam("fundCodes", "{codes}").build(java.util.Map.of("codes", codes)),
+                com.fundradar.core.fund.api.FundEvaluationStatusResponse.class);
+    }
+
+    public com.fundradar.core.fund.api.FundNewsFactsResponse getFundNewsFacts(String code) {
+        return readMaterials(builder -> builder.path("/internal/v1/funds/{code}/news-facts").build(code),
+                com.fundradar.core.fund.api.FundNewsFactsResponse.class);
+    }
+
+    /** 读取独立留存的公共风险事实；页面请求不触发重新计算。 */
+    public com.fundradar.core.fund.api.FundRiskSummaryResponse getFundRiskSummary(String code) {
+        return readMaterials(builder -> builder.path("/internal/v1/funds/{code}/risk-summary").build(code),
+                com.fundradar.core.fund.api.FundRiskSummaryResponse.class);
+    }
+
     /** 读取已发布公共资料快照；参数来自服务端校验，不接受外部目标地址。 */
     public FundMaterialsResponse getFundMaterials(String code, String reportId, String stockCode) {
         return readMaterials(builder -> {

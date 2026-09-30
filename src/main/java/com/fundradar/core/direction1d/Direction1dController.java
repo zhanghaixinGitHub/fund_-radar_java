@@ -26,8 +26,12 @@ public class Direction1dController {
         return ApiResponse.success(Direction1dPolicy.view(service.evidence(fundCode,forecastId)));
     }
     @PostMapping("/{fundCode}/prediction-1d/generate") public ResponseEntity<?> generate(@PathVariable String fundCode,@RequestBody(required=false) Map<String,Object> body) {
-        if(body!=null&&!body.isEmpty()) throw new IllegalArgumentException("NO_CLIENT_PARAMETERS");
-        return ResponseEntity.accepted().body(ApiResponse.success(service.generate(fundCode)));
+        if(body==null || !body.keySet().equals(Set.of("expectedTargetDate","requestId"))
+                || !(body.get("expectedTargetDate") instanceof String target)
+                || !(body.get("requestId") instanceof String request))
+            throw new IllegalArgumentException("EXPECTED_TARGET_AND_REQUEST_REQUIRED");
+        return ResponseEntity.accepted().body(ApiResponse.success(
+                service.generate(fundCode,LocalDate.parse(target),UUID.fromString(request))));
     }
     @GetMapping("/prediction-1d/history") public ApiResponse<?> history(@RequestParam(required=false) String fundCode,
         @RequestParam(defaultValue="2021-01-01") LocalDate startDate,@RequestParam(defaultValue="2026-12-31") LocalDate endDate,
@@ -38,12 +42,15 @@ public class Direction1dController {
     }
     @GetMapping("/prediction-1d/reports/{forecastId}") public ApiResponse<?> detail(@PathVariable UUID forecastId) { return ApiResponse.success(service.detail(forecastId)); }
     @GetMapping("/prediction-1d/metrics") public ApiResponse<?> metrics(@RequestParam(defaultValue="2021-01-01") LocalDate startDate,
-            @RequestParam(defaultValue="2026-12-31") LocalDate endDate,@RequestParam(defaultValue="FIRST_OBSERVED") String labelBasis) {
-        return ApiResponse.success(statistics.read(service.user(false),startDate,endDate,labelBasis));
+            @RequestParam(defaultValue="2026-12-31") LocalDate endDate,@RequestParam(defaultValue="FIRST_OBSERVED") String labelBasis,
+            @RequestParam(defaultValue="LAST_VALID") String predictionBasis) {
+        return ApiResponse.success(statistics.read(service.user(false),startDate,endDate,labelBasis,predictionBasis));
     }
     @ExceptionHandler(IllegalArgumentException.class) public ResponseEntity<?> invalid(IllegalArgumentException error) {
-        String code=error.getMessage(); boolean conflict=Set.of("MISSED_DEADLINE","CLOCK_SKEW").contains(code);
-        return ResponseEntity.status(conflict?409:400).body(ApiResponse.failure("DIRECTION_1D_REJECTED",conflict?code:"请求参数或实验数据未通过校验。"));
+        String code=error.getMessage(); boolean conflict=Set.of("MISSED_DEADLINE","CLOCK_SKEW","WINDOW_CHANGED").contains(code);
+        String message="CLOCK_SKEW".equals(code)?"资料时间暂未核实，请稍后重试。"
+                :conflict?"该预测日期的更新窗口已结束，请核对新的目标日期后再更新。":"请求参数或预测资料暂时无法核实。";
+        return ResponseEntity.status(conflict?409:400).body(ApiResponse.failure("DIRECTION_1D_REJECTED",message));
     }
     @ExceptionHandler(NoSuchElementException.class) public ResponseEntity<?> missing() { return ResponseEntity.status(404).body(ApiResponse.failure("NOT_FOUND","本人没有该记录。")); }
     @ExceptionHandler(IllegalStateException.class) public ResponseEntity<?> unavailable() { return ResponseEntity.status(503).body(ApiResponse.failure("DIRECTION_1D_UNAVAILABLE","1日实验服务暂不可用，已留档记录保留。")); }
