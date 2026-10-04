@@ -15,6 +15,12 @@ public class InternalMultiPredictionController {
     private final MultiPredictionPipeline pipeline;private final AiServiceProperties properties;
     private final AutoModelService automatic;
     public InternalMultiPredictionController(MultiPredictionPipeline pipeline,AiServiceProperties properties,AutoModelService automatic) {this.pipeline=pipeline;this.properties=properties;this.automatic=automatic;}
+    /** 仅内部同步协调读取聚合日期；服务令牌与已有回调采用相同校验。 */
+    @GetMapping("/saved-results")
+    public List<Map<String,Object>> savedResults(HttpServletRequest request) {
+        authenticate(request);
+        return pipeline.savedResults();
+    }
     @PostMapping("/finalize")
     public Map<String,Object> finish(HttpServletRequest request,@RequestBody Map<String,String> body) {
         authenticate(request);

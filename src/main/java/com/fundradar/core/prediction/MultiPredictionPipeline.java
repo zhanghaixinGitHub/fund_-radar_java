@@ -5,14 +5,13 @@ import com.fundradar.core.advice.AdviceScheduler;
 import com.fundradar.core.direction1d.Direction1dBatchService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.sql.DataSource;
 import java.util.*;
 
-/** 唯一的多周期自动入口。原预测原文复用，失败项可在下一轮重试；从不创建交易。 */
+/** 多周期手动编排与留档；不注册定时预测，一键同步由既有内部回调完成留档。 */
 @Service
 public class MultiPredictionPipeline {
     private static final Logger LOG=LoggerFactory.getLogger(MultiPredictionPipeline.class);
@@ -24,8 +23,7 @@ public class MultiPredictionPipeline {
                                    JdbcClient db,DataSource datasource,ObjectProvider<AdviceScheduler> advice,ObjectProvider<AutoModelService> automatic) {
         this.client=client;this.service=service;this.scope=scope;this.db=db;this.datasource=datasource;this.advice=advice;this.automatic=automatic;
     }
-    @Scheduled(scheduler="adviceTaskScheduler",fixedDelayString="${prediction.multi.fixed-delay:PT30M}",
-            initialDelayString="${prediction.multi.initial-delay:PT40S}")
+    /** 保留显式调用兼容性；本方法不再由定时器触发。 */
     public void tick() {
         try(var connection=datasource.getConnection()) {
             try(var statement=connection.prepareStatement("SELECT pg_try_advisory_lock(721109,1)")) {
@@ -55,6 +53,32 @@ public class MultiPredictionPipeline {
         } catch(InterruptedException error) {Thread.currentThread().interrupt();LOG.warn("MultiPredictionPipeline.tick   >>> interrupted",error);
         } catch(Exception error) {LOG.error("MultiPredictionPipeline.tick   >>> pipeline failed; committed evidence preserved",error);}
     }
+    /** 当前有效关注范围内最近两期的已保存成果；与本轮待生成项分开，不修改任何预测。 */
+    public List<Map<String,Object>> savedResults() {
+        var codes=new ArrayList<String>(); String after="";
+        while(true) { var page=scope.fundCodes(after); if(page.isEmpty()) break;
+            codes.addAll(page); after=page.get(page.size()-1); }
+        if(codes.isEmpty()) return List.of();
+        return db.sql("""
+          WITH facts AS (
+            SELECT f.fund_code,'T1' AS horizon,f.target_nav_date::text AS day
+            FROM direction_1d_forecast f JOIN direction_1d_forecast_receipt r USING(forecast_id)
+            WHERE f.fund_code IN (:codes) AND r.status='VERIFIED' AND r.content_hash=f.content_hash
+              AND EXISTS(SELECT 1 FROM direction_1d_user_forecast u JOIN watchlist_item w
+                ON w.user_id=u.user_id AND w.fund_code=f.fund_code WHERE u.forecast_id=f.forecast_id)
+            UNION ALL
+            SELECT l.fund_code,l.payload->>'horizonId',l.payload->>'startDate'
+            FROM prediction_user_link l JOIN watchlist_item w ON w.user_id=l.user_id AND w.fund_code=l.fund_code
+            WHERE l.fund_code IN (:codes) AND l.payload->>'startDate' IS NOT NULL
+          ), counts AS (
+            SELECT horizon,day,count(DISTINCT fund_code) AS count,
+              dense_rank() OVER(PARTITION BY horizon ORDER BY day DESC) AS rank
+            FROM facts GROUP BY horizon,day
+          ) SELECT horizon AS "horizonId",day AS "targetDate",count FROM counts
+            WHERE rank<=2 ORDER BY day DESC,horizon
+          """).param("codes",codes).query().listOfRows();
+    }
+
     /** 只按服务器查出的当前关注关系建立引用，回调不能指定任何私人账户。 */
     public Map<String,Object> archive(UUID taskId,boolean generateAdvice) {
         var task=client.get("/batches/"+taskId);

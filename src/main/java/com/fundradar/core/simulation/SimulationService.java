@@ -137,6 +137,69 @@ public class SimulationService {
         return repo.performance(user,code,start,end);
     }
     public List<Plan> plans() { return repo.plans(reader()); }
+    /** 本人历史目录包含已清仓基金；有界内存筛选，关键词不进入 SQL 通配表达式。 */
+    @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public Page<SimulationEarnings.Fund> earningsFunds(String keyword,int page,int size) {
+        UUID user=reader(); validatePage(page,size);
+        String term=keyword==null ? "" : keyword.strip();
+        if(term.length()>50) throw new IllegalArgumentException("基金搜索最多 50 个字。");
+        // 超大账户仍能按完整代码查单基金，不能让目录上限封死单基金查询入口。
+        var catalog=term.matches("[0-9]{6}") ? repo.earningsFunds(user,term) : earningsCatalog(user,null);
+        var funds=catalog.stream().filter(f -> f.fundCode().contains(term) ||
+                f.fundName().toLowerCase(Locale.ROOT).contains(term.toLowerCase(Locale.ROOT))).toList();
+        int offset=Math.min((page-1)*size,funds.size());
+        return new Page<>(funds.subList(offset,Math.min(offset+size,funds.size())),page,size,funds.size());
+    }
+    private List<SimulationEarnings.Fund> earningsCatalog(UUID user,String code) {
+        var funds=repo.earningsFunds(user,code);
+        if(funds.size()>2000) throw new SimulationException("SIM_HISTORY_LIMIT","账户历史基金超过 2000 只，请按基金查询。");
+        if(code!=null && funds.isEmpty()) throw new SimulationException("SIM_NOT_FOUND","没有这只基金的本人收益记录。");
+        return funds;
+    }
+    /** 缺少公共日历时保留已有收益，未知日期明确标记，不能靠工作日规则假造非交易日。 */
+    private CalendarData earningsCalendar() {
+        try { return marketClient.calendar(); } catch(SimulationException unavailable) { return null; }
+    }
+    @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public SimulationEarnings.Result earnings(String code,String range,LocalDate start,LocalDate end,int page,int size) {
+        UUID user=reader(); validatePage(page,size); if(code!=null) validCode(code);
+        LocalDate today=clock.instant().atZone(SimulationCalendar.ZONE).toLocalDate();
+        var funds=earningsCatalog(user,code);
+        LocalDate first=funds.stream().map(SimulationEarnings.Fund::firstDate).min(LocalDate::compareTo).orElse(today);
+        if(!"CUSTOM".equals(range)) {
+            end=today;
+            start=switch(range) {
+                case "MONTH" -> today.minusMonths(1).plusDays(1);
+                case "QUARTER" -> today.minusMonths(3).plusDays(1);
+                case "YEAR" -> today.withDayOfYear(1);
+                case "ALL" -> first.isAfter(today) ? today : first;
+                default -> throw new IllegalArgumentException("请选择有效的收益日期范围。");
+            };
+        }
+        if(start==null || end==null || start.isAfter(end) || end.isAfter(today)) throw new IllegalArgumentException("请填写不晚于今天的有效起止日期。");
+        if(java.time.temporal.ChronoUnit.DAYS.between(start,end)>3660) throw new IllegalArgumentException("单次最多查询十年，请使用自选日期分段查看；未截断历史。");
+        var values=repo.earningsAggregates(user,code,start,end);
+        return SimulationEarnings.summarize(code==null ? null : funds.get(0),funds,values,start,end,earningsCalendar(),page,size);
+    }
+    @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public Page<SimulationEarnings.Detail> earningsDetails(LocalDate date,int page,int size) {
+        UUID user=reader(); validatePage(page,size);
+        LocalDate today=clock.instant().atZone(SimulationCalendar.ZONE).toLocalDate();
+        if(date==null || date.isAfter(today) || date.isBefore(LocalDate.of(1900,1,1))) throw new IllegalArgumentException("请选择不晚于今天的有效日期。");
+        var funds=earningsCatalog(user,null).stream().filter(f -> !f.firstDate().isAfter(date)).toList();
+        int offset=Math.min((page-1)*size,funds.size());
+        var slice=funds.subList(offset,Math.min(offset+size,funds.size()));
+        var values=repo.earningsDetails(user,slice.stream().map(SimulationEarnings.Fund::fundCode).toList(),date);
+        var calendar=earningsCalendar();
+        var details=slice.stream().map(f -> {
+            var d=values.get(f.fundCode());
+            String status=f.reviewRequired() ? "REVIEW" : d==null ? SimulationEarnings.missingStatus(date,f.lastDate(),calendar)
+                    : d.dailyGain()==null ? "MISSING" : "COMPLETE";
+            return new SimulationEarnings.Detail(f.fundCode(),f.fundName(),status,
+                    "COMPLETE".equals(status) ? d.dailyGain() : null,d==null || f.reviewRequired() ? null : d.cumulativeGain());
+        }).toList();
+        return new Page<>(details,page,size,funds.size());
+    }
     public Page<Period> periods(UUID id,int page,int size) { validatePage(page,size); return repo.periods(reader(),id,page,size); }
     public Map<String,LocalDate> planPreview(PlanRequest request) {
         planner(); validatePlan(request);

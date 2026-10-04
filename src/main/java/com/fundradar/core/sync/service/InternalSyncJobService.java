@@ -192,7 +192,8 @@ public class InternalSyncJobService implements SyncJobService {
                 source.errorCode(),
                 source.errorMessage(),
                 source.startedAt(),
-                source.finishedAt()
+                source.finishedAt(),
+                source.resultSummary()
         );
     }
 

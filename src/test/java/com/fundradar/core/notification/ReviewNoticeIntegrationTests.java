@@ -77,9 +77,10 @@ class ReviewNoticeIntegrationTests {
         assertThrows(RuntimeException.class,()->db.sql("UPDATE review_notice_revision SET lifecycle='RESOLVED' WHERE notice_id=:id").param("id",first.noticeId()).update());
     }
     UUID rule(boolean enabled) {
-        UUID id=UUID.randomUUID();
-        db.sql("INSERT INTO alert_rule(rule_id,user_id,fund_code,rule_type,enabled) VALUES(:id,:user,'002112','EVENT',:enabled)")
-                .param("id",id).param("user",user).param("enabled",enabled).update();return id;
+        db.sql("INSERT INTO watchlist_item(watchlist_item_id,user_id,fund_code) VALUES(:id,:user,'002112') ON CONFLICT DO NOTHING")
+                .param("id",UUID.randomUUID()).param("user",user).update();
+        return db.sql("UPDATE alert_rule SET enabled=:enabled WHERE user_id=:user AND fund_code='002112' AND rule_type='EVENT' RETURNING rule_id")
+                .param("user",user).param("enabled",enabled).query(UUID.class).single();
     }
     FundNewsFactsResponse news(String hash,String received) {
         return new FundNewsFactsResponse("002112","2026-09-29T08:00:00Z",true,
@@ -109,5 +110,16 @@ class ReviewNoticeIntegrationTests {
         assertEquals(State.RETRACTED,service.read(1).items().get(0).lifecycle());
         db.sql("UPDATE alert_rule SET enabled=true WHERE rule_id=:id").param("id",id).update();checker.check(user,facts,today);
         var current=service.read(1).items().get(0);assertEquals(State.ACTIVE,current.lifecycle());assertEquals(3,current.revision());
+    }
+
+    @Test void unfollowStopsNewNoticesAndPreservesSubscriptionPreference() {
+        UUID id=rule(true);var facts=news("b".repeat(64),"2026-09-28T08:00:00Z");var today=LocalDate.of(2026,9,29);
+        checker.check(user,facts,today);
+        db.sql("DELETE FROM watchlist_item WHERE user_id=:user AND fund_code='002112'").param("user",user).update();
+        checker.check(user,facts,today);
+        assertEquals(State.RETRACTED,service.read(1).items().get(0).lifecycle());
+        assertTrue(db.sql("SELECT enabled FROM alert_rule WHERE rule_id=:id").param("id",id).query(Boolean.class).single());
+        assertEquals(0,checker.check(user,news("c".repeat(64),"2026-09-29T08:00:00Z"),today));
+        assertEquals(1,service.read(1).items().size());
     }
 }

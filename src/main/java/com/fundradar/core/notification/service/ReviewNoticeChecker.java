@@ -7,6 +7,7 @@ import com.fundradar.core.portfolio.AccountFundingRepository;
 import com.fundradar.core.portfolio.AccountFundingTypes.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import java.time.*;
 import java.util.*;
 import static com.fundradar.core.notification.service.ReviewNoticeService.*;
@@ -30,6 +31,7 @@ public class ReviewNoticeChecker {
                 OR EXISTS(SELECT 1 FROM review_notice n WHERE n.user_id=u.user_id)) ORDER BY user_id LIMIT 200
             """).param("after",after).query(UUID.class).list();
     }
+    @Transactional
     public int check(UUID user,FundNewsFactsResponse news,LocalDate today) {
         int changed=0;
         for(Scope scope:Scope.values()) {
@@ -40,7 +42,14 @@ public class ReviewNoticeChecker {
                 else changed+=closeAccount(user,scope,kind,value)?1:0;
             }
         }
-        List<UUID> rules=db.sql("SELECT rule_id FROM alert_rule WHERE user_id=:user AND fund_code='002112' AND rule_type='EVENT' AND enabled=true")
+        // 锁住本次采用的订阅和关注关系直到消息写入结束，关闭/取消关注成功后不会再按旧状态投递。
+        // 不删除规则，因此重新关注时仍记得用户曾手动关闭哪类提醒。
+        List<UUID> rules=db.sql("""
+                SELECT rule.rule_id FROM alert_rule rule
+                JOIN watchlist_item item ON item.user_id=rule.user_id AND item.fund_code=rule.fund_code
+                WHERE rule.user_id=:user AND rule.fund_code='002112' AND rule.rule_type='EVENT' AND rule.enabled=true
+                FOR SHARE OF rule, item
+                """)
                 .param("user",user).query(UUID.class).list();
         if(news!=null && "002112".equals(news.fundCode()) && news.items()!=null && news.items().size()<=50) {
             for(UUID rule:rules) for(var item:news.items()) {
@@ -58,7 +67,7 @@ public class ReviewNoticeChecker {
             State next=!enabled?State.RETRACTED:old.validUntil()!=null && today.isAfter(old.validUntil())?State.EXPIRED:null;
             if(next==null) continue;
             Map<String,Object> payload=new TreeMap<>(old.payload());
-            payload.put("changeExplanation",!enabled?"你已停用相关基金事项提醒；原事实和历史仍保留。":"这条消息已结束30天信息观察窗口；不代表风险消失。");
+            payload.put("changeExplanation",!enabled?"你已关闭这类提醒或取消关注；原事实和历史仍保留。":"这条消息已结束30天信息观察窗口；不代表风险消失。");
             changed+=notices.observe(user,new Observation(old.businessKey(),null,old.fundCode(),old.kind(),next,payload,old.validUntil()))?1:0;
         }
         return changed;

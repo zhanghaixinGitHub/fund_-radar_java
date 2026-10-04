@@ -281,6 +281,65 @@ public class SimulationRepository {
             """).param("user",user).param("code",code).param("start",start).param("end",end)
                 .query((r,n) -> new Daily(r.getObject(1,LocalDate.class),r.getBigDecimal(2),r.getBigDecimal(3),r.getBigDecimal(4))).list();
     }
+
+    /** 一次批量读取本人历史基金，不按当前份额过滤；2001 条探测容量，调用方超过 2000 明确拒绝而非截断。 */
+    public List<SimulationEarnings.Fund> earningsFunds(UUID user,String code) {
+        String filter=code==null ? "" : " AND fund_code=:code";
+        var query=db.sql("""
+            WITH history AS (
+              SELECT fund_code,min(trade_date) AS first_date,NULL::date AS last_date,max(fund_name) AS fund_name
+              FROM sim_order WHERE user_id=:user AND status<>'CANCELLED'
+            """+filter+" GROUP BY fund_code UNION ALL "+"""
+              SELECT fund_code,min(valuation_date),max(valuation_date),NULL::text
+              FROM sim_daily_valuation WHERE user_id=:user
+            """+filter+" GROUP BY fund_code), funds AS ("+"""
+              SELECT fund_code,min(first_date) AS first_date,max(last_date) AS last_date,max(fund_name) AS fund_name
+              FROM history GROUP BY fund_code)
+            SELECT f.*,p.snapshot,p.issue FROM funds f LEFT JOIN sim_position p
+              ON p.user_id=:user AND p.fund_code=f.fund_code ORDER BY f.fund_code LIMIT 2001
+            """).param("user",user);
+        if(code!=null) query.param("code",code);
+        return query.query((r,n) -> {
+            var p=decode(r.getString("snapshot"),Position.class);
+            return new SimulationEarnings.Fund(r.getString("fund_code"),p!=null ? p.fundName() :
+                    Objects.requireNonNullElse(r.getString("fund_name"),r.getString("fund_code")),
+                    r.getObject("first_date",LocalDate.class),r.getObject("last_date",LocalDate.class),
+                    p!=null && p.shares().signum()==0 && p.totalBuy().signum()>0,
+                    p==null ? null : p.marketValue(),p==null ? null : p.navDate(),r.getString("issue")!=null);
+        }).list();
+    }
+
+    /** 数据库先按同日聚合，最多返回 3661 条；不逐基金取曲线。待核对的快照不能继续充作完整收益。 */
+    public List<SimulationEarnings.Aggregate> earningsAggregates(UUID user,String code,LocalDate start,LocalDate end) {
+        String filter=code==null ? "" : " AND d.fund_code=:code";
+        var query=db.sql("""
+            SELECT d.valuation_date,
+              count(*) FILTER (WHERE p.issue IS NULL) AS valued,
+              count(d.daily_gain) FILTER (WHERE p.issue IS NULL) AS known,
+              sum(d.daily_gain) FILTER (WHERE p.issue IS NULL) AS daily_gain,
+              sum(d.cumulative_gain) FILTER (WHERE p.issue IS NULL) AS cumulative_gain
+            FROM sim_daily_valuation d LEFT JOIN sim_position p ON p.user_id=d.user_id AND p.fund_code=d.fund_code
+            WHERE d.user_id=:user AND d.valuation_date BETWEEN :start AND :end
+            """+filter+" GROUP BY d.valuation_date ORDER BY d.valuation_date")
+                .param("user",user).param("start",start).param("end",end);
+        if(code!=null) query.param("code",code);
+        return query.query((r,n) -> new SimulationEarnings.Aggregate(r.getObject(1,LocalDate.class),r.getInt(2),r.getInt(3),
+                r.getBigDecimal(4),r.getBigDecimal(5))).list();
+    }
+
+    /** 展开某日时只批量取当前基金页；用户键与基金页均来自服务端，不能按任意用户或全市场代码查询。 */
+    public Map<String,Daily> earningsDetails(UUID user,List<String> codes,LocalDate date) {
+        if(codes.isEmpty()) return Map.of();
+        var result=new HashMap<String,Daily>();
+        db.sql("""
+            SELECT fund_code,valuation_date,market_value,cumulative_gain,daily_gain FROM sim_daily_valuation
+            WHERE user_id=:user AND fund_code IN (:codes) AND valuation_date=:date
+            """).param("user",user).param("codes",codes).param("date",date).query((r,n) -> {
+                result.put(r.getString(1),new Daily(r.getObject(2,LocalDate.class),r.getBigDecimal(3),r.getBigDecimal(4),r.getBigDecimal(5)));
+                return 0;
+            }).list();
+        return result;
+    }
     public Page<Map<String,Object>> ledgerPage(UUID user,int page,int size,String code) {
         String filter=code==null ? "" : " AND fund_code=:code";
         var q=db.sql("SELECT entry_id,fund_code,entry_type,payload,created_at FROM sim_ledger_entry WHERE user_id=:user"+filter+

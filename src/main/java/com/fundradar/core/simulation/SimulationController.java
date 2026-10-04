@@ -15,6 +15,19 @@ public class SimulationController {
     private final SimulationService service;
     public SimulationController(SimulationService service) { this.service=service; }
     @GetMapping public ApiResponse<Overview> overview() { return ApiResponse.success(service.overview()); }
+    @GetMapping("/earnings/funds") public ApiResponse<Page<SimulationEarnings.Fund>> earningsFunds(
+            @RequestParam(required=false) String keyword,@RequestParam(defaultValue="1") int page,
+            @RequestParam(defaultValue="20") int pageSize) { return ApiResponse.success(service.earningsFunds(keyword,page,pageSize)); }
+    @GetMapping("/earnings") public ApiResponse<SimulationEarnings.Result> earnings(
+            @RequestParam(required=false) String fundCode,@RequestParam(defaultValue="MONTH") String range,
+            @RequestParam(required=false) LocalDate startDate,@RequestParam(required=false) LocalDate endDate,
+            @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
+        return ApiResponse.success(service.earnings(fundCode,range,startDate,endDate,page,pageSize));
+    }
+    @GetMapping("/earnings/days/{date}") public ApiResponse<Page<SimulationEarnings.Detail>> earningsDetails(
+            @PathVariable LocalDate date,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
+        return ApiResponse.success(service.earningsDetails(date,page,pageSize));
+    }
     @GetMapping("/preview/{fundCode}") public ApiResponse<Preview> preview(@PathVariable String fundCode) { return ApiResponse.success(service.preview(fundCode)); }
     @PostMapping("/orders") public ApiResponse<Order> place(@Valid @RequestBody OrderRequest request) { return ApiResponse.success(service.place(request)); }
     @PostMapping("/orders/{id}/cancel") public ApiResponse<Order> cancel(@PathVariable UUID id) { return ApiResponse.success(service.cancel(id)); }

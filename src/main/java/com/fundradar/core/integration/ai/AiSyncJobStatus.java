@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** Python 内部服务返回的同步中心任务状态。 */
@@ -26,6 +27,16 @@ public record AiSyncJobStatus(
         @JsonProperty("error_code") String errorCode,
         @JsonProperty("error_message") String errorMessage,
         @JsonProperty("started_at") Instant startedAt,
-        @JsonProperty("finished_at") Instant finishedAt
+        @JsonProperty("finished_at") Instant finishedAt,
+        @JsonProperty("result_summary") Map<String, Object> resultSummary
 ) {
+    /** 兼容已有构造与旧记录；没有业务摘要表示未知，不伪造已完成数量。 */
+    public AiSyncJobStatus(UUID jobId, String jobType, String status, LocalDate requestedNavDate,
+            List<String> fundCodes, int progressCurrent, int progressTotal, String currentFundCode,
+            String progressMessage, UUID syncRunId, int fetchedCount, int createdCount, int updatedCount,
+            int skippedCount, String errorCode, String errorMessage, Instant startedAt, Instant finishedAt) {
+        this(jobId, jobType, status, requestedNavDate, fundCodes, progressCurrent, progressTotal,
+             currentFundCode, progressMessage, syncRunId, fetchedCount, createdCount, updatedCount,
+             skippedCount, errorCode, errorMessage, startedAt, finishedAt, null);
+    }
 }

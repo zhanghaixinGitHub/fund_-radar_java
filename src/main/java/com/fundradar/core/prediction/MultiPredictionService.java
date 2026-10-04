@@ -49,6 +49,18 @@ public class MultiPredictionService {
         return client.get("/funds/"+code+"/history?limit=30"+(before==null?"":"&before="+java.net.URLEncoder.encode(before,java.nio.charset.StandardCharsets.UTF_8))
                 +(beforeId==null?"":"&beforeId="+beforeId));
     }
+    /** 只解释本人当前关注基金的公共原预测；Python 按编号、基金及原文摘要再次核对。 */
+    public JsonNode narrative(String code,UUID predictionId) {
+        owns(user(false),code);
+        var result=client.post("/funds/"+code+"/predictions/"+predictionId+"/narrative",Map.of());
+        if(!code.equals(result.path("fundCode").asText())
+                || !predictionId.toString().equals(result.path("sourceId").asText()))
+            throw new IllegalStateException("解释与原预测不一致");
+        var view=(com.fasterxml.jackson.databind.node.ObjectNode)result.deepCopy();
+        view.remove(List.of("sourceId","contentHash"));
+        view.put("recordId",predictionId.toString()); view.put("kind","multi");
+        return view;
+    }
     public JsonNode generate(String code) { UUID user=user(true); owns(user,code); return start(List.of(code),user,"SELF"); }
     public JsonNode generateMine() {
         UUID user=user(true); var codes=new ArrayList<String>(); String after="";

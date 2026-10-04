@@ -25,6 +25,13 @@ public class Direction1dController {
     public ApiResponse<?> evidence(@PathVariable String fundCode,@PathVariable UUID forecastId) {
         return ApiResponse.success(Direction1dPolicy.view(service.evidence(fundCode,forecastId)));
     }
+    /** 外部文案生成使用 POST，沿用会话、关注范围与 CSRF 校验，不接受自定义正文。 */
+    @PostMapping("/{fundCode}/prediction-1d/evidence/{forecastId}/narrative")
+    public ApiResponse<?> narrative(@PathVariable String fundCode,@PathVariable UUID forecastId,
+                                   @RequestBody(required=false) Map<String,Object> body) {
+        if(body!=null&&!body.isEmpty()) throw new IllegalArgumentException("解释无需客户端内容");
+        return ApiResponse.success(Direction1dPolicy.view(service.narrative(fundCode,forecastId)));
+    }
     @PostMapping("/{fundCode}/prediction-1d/generate") public ResponseEntity<?> generate(@PathVariable String fundCode,@RequestBody(required=false) Map<String,Object> body) {
         if(body==null || !body.keySet().equals(Set.of("expectedTargetDate","requestId"))
                 || !(body.get("expectedTargetDate") instanceof String target)

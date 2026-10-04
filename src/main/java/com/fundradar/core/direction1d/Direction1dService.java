@@ -61,6 +61,23 @@ public class Direction1dService {
             throw new IllegalStateException("预测依据与原记录不一致");
         return result;
     }
+    /**
+     * 为本人已关联的原预测整理说明；解释可缓存，但原预测及其方向不发生变化。
+     * 浏览器只给档案编号，公共作业编号与原文摘要必须从当前用户的档案关联中取得。
+     */
+    public JsonNode narrative(String code,UUID forecastId) {
+        UUID owner=user(false); requireFund(owner,code);
+        var source=repo.evidenceSource(owner,code,forecastId);
+        var job=source.get("source_job_id").toString();
+        var result=client.post("/forecast-jobs/"+job+"/narrative?fund_code="+code,Map.of());
+        if(!code.equals(result.path("fundCode").asText()) || !job.equals(result.path("sourceId").asText())
+                || !source.get("content_hash").equals(result.path("contentHash").asText()))
+            throw new IllegalStateException("解释与原预测不一致");
+        var view=(com.fasterxml.jackson.databind.node.ObjectNode)result.deepCopy();
+        view.remove(List.of("sourceId","contentHash"));
+        view.put("recordId",forecastId.toString()); view.put("kind","daily");
+        return view;
+    }
     public Map<String,Object> generate(String code) {
         return generate(code,null,UUID.randomUUID());
     }

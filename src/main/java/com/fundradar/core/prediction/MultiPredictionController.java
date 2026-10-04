@@ -15,6 +15,12 @@ public class MultiPredictionController {
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","no-store, private"); }
     @GetMapping("/watchlist/{code}/predictions") public ApiResponse<?> current(@PathVariable String code) { return ok(service.current(code)); }
     @GetMapping("/watchlist/{code}/predictions/history") public ApiResponse<?> history(@PathVariable String code,@RequestParam(required=false) String before,@RequestParam(required=false) UUID beforeId) { return ok(service.history(code,before,beforeId)); }
+    /** 解释按原记录缓存，单独生成失败不影响已有预测；禁止客户端传入事实或提示词。 */
+    @PostMapping("/watchlist/{code}/predictions/{id}/narrative")
+    public ApiResponse<?> narrative(@PathVariable String code,@PathVariable UUID id,
+                                   @RequestBody(required=false) Map<String,Object> body) {
+        empty(body); return ok(service.narrative(code,id));
+    }
     @PostMapping("/watchlist/{code}/predictions/generate") public ApiResponse<?> generate(@PathVariable String code,@RequestBody(required=false) Map<String,Object> body) { empty(body); return ok(service.generate(code)); }
     @PostMapping("/watchlist/predictions/generate") public ApiResponse<?> generateAll(@RequestBody(required=false) Map<String,Object> body) { empty(body); return ok(service.generateMine()); }
     @GetMapping("/watchlist/predictions/tasks/{id}") public ApiResponse<?> task(@PathVariable UUID id) { return ok(service.task(id,false)); }
