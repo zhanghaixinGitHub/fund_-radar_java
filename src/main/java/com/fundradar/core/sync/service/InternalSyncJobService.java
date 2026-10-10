@@ -16,6 +16,19 @@ import java.util.UUID;
 @Service
 public class InternalSyncJobService implements SyncJobService {
 
+    @Override
+    public SyncJobResponse startFundRatings(String fundCode) {
+        if (fundCode != null && !fundCode.matches("[0-9]{6}"))
+            throw new IllegalArgumentException("请提供六位基金代码。");
+        return toResponse(aiSyncJobClient.startFundRatings(fundCode));
+    }
+
+    @Override
+    public SyncJobResponse getLatestFundRatings() {
+        var source = aiSyncJobClient.getLatestFundRatings();
+        return source == null ? null : toResponse(source);
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(InternalSyncJobService.class);
 
     private final AiSyncJobClient aiSyncJobClient;

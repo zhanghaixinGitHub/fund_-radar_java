@@ -27,6 +27,21 @@ import java.util.List;
 @Service
 public class AiFundClient {
 
+    /** 一次批量读取已发布评级，服务间令牌只留在 Java 与 Python 之间。 */
+    public com.fundradar.core.fund.api.FundRatingResponse.Batch getFundRatings(String codes) {
+        return readMaterials(builder -> builder.path("/internal/v1/funds/ratings")
+                .queryParam("fundCodes", "{codes}").build(java.util.Map.of("codes", codes)),
+                com.fundradar.core.fund.api.FundRatingResponse.Batch.class);
+    }
+
+    public com.fundradar.core.fund.api.FundRatingResponse getFundRating(String code, String reference) {
+        return readMaterials(builder -> {
+            builder.path("/internal/v1/funds/{code}/rating");
+            if (reference != null) builder.queryParam("ratingRef", reference);
+            return builder.build(code);
+        }, com.fundradar.core.fund.api.FundRatingResponse.class);
+    }
+
     /** 同页基金共用一个来源审计批次，避免逐行调用 Python。 */
     public com.fundradar.core.fund.api.FundEvaluationStatusResponse getEvaluationStatus(String codes) {
         return readMaterials(builder -> builder.path("/internal/v1/funds/evaluation-status")

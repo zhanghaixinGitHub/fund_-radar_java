@@ -16,6 +16,34 @@ import java.util.UUID;
 @Service
 public class AiSyncJobClient {
 
+    /** 全量/单只路径明确分开；POST 不自动重试，网络超时后通过任务查询恢复。 */
+    public AiSyncJobStatus startFundRatings(String code) {
+        try {
+            var request = restClient.post().uri("/internal/v1/funds/sync-jobs/fund-ratings/"
+                    + (code == null ? "all" : "single"))
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId());
+            if (code != null) request.body(java.util.Map.of("fundCode", code));
+            var result = request.retrieve().body(AiSyncJobStatus.class);
+            if (result == null) throw new AiServiceUnavailableException("Empty rating job", null);
+            return result;
+        } catch (RestClientResponseException error) {
+            if (error.getStatusCode().value() == 409) throw new MarketNavSyncInProgressException("rating busy", error);
+            if (error.getStatusCode().value() == 404) throw new FundNotFoundException(code);
+            throw unavailable(error);
+        } catch (AiServiceUnavailableException | MarketNavSyncInProgressException | FundNotFoundException error) {
+            throw error;
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
+    public AiSyncJobStatus getLatestFundRatings() {
+        try {
+            return restClient.get().uri("/internal/v1/funds/sync-jobs/fund-ratings/latest")
+                    .header(SERVICE_TOKEN_HEADER, properties.getToken())
+                    .header(TRACE_ID_HEADER, TraceContext.getTraceId()).retrieve().body(AiSyncJobStatus.class);
+        } catch (RuntimeException error) { throw unavailable(error); }
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(AiSyncJobClient.class);
     private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
     private static final String TRACE_ID_HEADER = "X-Trace-Id";

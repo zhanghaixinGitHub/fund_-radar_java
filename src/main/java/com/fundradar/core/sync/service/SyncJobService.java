@@ -9,6 +9,10 @@ import java.util.UUID;
 /** 同步中心的对外业务契约，便于后续登记更多独立同步任务。 */
 public interface SyncJobService {
 
+    /** 空值仅用于明确的全量入口；单只入口先校验代码，再重算所属完整比较类别。 */
+    SyncJobResponse startFundRatings(String fundCode);
+    SyncJobResponse getLatestFundRatings();
+
     /** 更新明确指定基金的持仓、公司经营与公告，第一阶段仅支持 002112。 */
     SyncJobResponse startFundMaterials(String fundCode);
     SyncJobResponse getLatestFundMaterials();

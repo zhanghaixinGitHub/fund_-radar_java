@@ -33,6 +33,31 @@ import java.util.UUID;
 @RequestMapping("/api/v1/sync-jobs")
 public class SyncJobController {
 
+    public record RatingSingleRequest(String fundCode) { }
+
+    @PostMapping("/fund-ratings/all")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startFundRatings() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startFundRatings(null)));
+    }
+
+    @PostMapping("/fund-ratings/single")
+    public ResponseEntity<ApiResponse<SyncJobResponse>> startFundRating(
+            @org.springframework.web.bind.annotation.RequestBody RatingSingleRequest body) {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
+        if (body == null || body.fundCode() == null || !body.fundCode().matches("[0-9]{6}"))
+            throw new IllegalArgumentException("请明确提供六位基金代码。");
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(syncJobService.startFundRatings(body.fundCode())));
+    }
+
+    @GetMapping("/fund-ratings/latest")
+    public ApiResponse<SyncJobResponse> getLatestFundRatings() {
+        CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_READ);
+        return ApiResponse.success(syncJobService.getLatestFundRatings());
+    }
+
     private final SyncJobService syncJobService;
 
     public SyncJobController(SyncJobService syncJobService) {
