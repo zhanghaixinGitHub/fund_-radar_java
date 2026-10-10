@@ -71,7 +71,7 @@ management:
 direction1d:
   review-enabled: ${DIRECTION1D_REVIEW_ENABLED:true}
   training-enabled: ${DIRECTION1D_TRAINING_ENABLED:true}
-  fixed-delay: ${DIRECTION1D_FIXED_DELAY:PT30M}
+  fixed-delay: ${DIRECTION1D_FIXED_DELAY:PT5M}
   initial-delay: ${DIRECTION1D_INITIAL_DELAY:PT10S}
 
 logging:

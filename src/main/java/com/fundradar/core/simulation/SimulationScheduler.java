@@ -1,6 +1,8 @@
 package com.fundradar.core.simulation;
 
 import com.fundradar.core.simulation.SimulationService.PlanRunStats;
+import com.fundradar.core.integration.ai.MarketRevisionClient;
+import com.fundradar.core.integration.ai.MarketRevisionClient.Query;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -22,8 +24,16 @@ public class SimulationScheduler {
     private final SimulationService service;
     private final DataSource dataSource;
     private final Clock clock;
-    public SimulationScheduler(SimulationRepository repo,SimulationMarketClient market,SimulationService service,DataSource dataSource,Clock clock) {
-        this.repo=repo; this.market=market; this.service=service; this.dataSource=dataSource; this.clock=clock;
+    private final MarketRevisionClient revisions;
+    // 仅缓存已成功读取的公共行情；重启后首次重新核验，不以缓存替代数据库中的订单幂等与账户锁。
+    private final Map<String,CachedMarket> marketCache=new HashMap<>();
+    private record CachedMarket(Query query,String revision,Market data) {}
+    private String calendarRevision;
+    private SimulationCalendar cachedCalendar;
+    private Object completedWork;
+    public SimulationScheduler(SimulationRepository repo,SimulationMarketClient market,SimulationService service,DataSource dataSource,Clock clock,
+                               MarketRevisionClient revisions) {
+        this.repo=repo; this.market=market; this.service=service; this.dataSource=dataSource; this.clock=clock; this.revisions=revisions;
     }
     @Scheduled(fixedDelayString="${simulation.fixed-delay:PT1M}",initialDelayString="${simulation.initial-delay:PT15S}")
     public void tick() {
@@ -46,6 +56,8 @@ public class SimulationScheduler {
                 if(!result.getBoolean(1)) throw new SimulationException("SIM_RUN_BUSY","后台正在执行定投或结算，请稍后重试。");
             }
             try {
+                // 手动执行始终读取最新资料，并使下一轮后台重新检查，避免复用手动处理前的账目水位。
+                completedWork=null; marketCache.clear();
                 PlanRunStats stats=runCatchUp();
                 String message=stats.ordersCreated()>0
                         ? "检查 %d 个进行中计划，按前一交易日净值补入 %d 笔定投并确认，跳过 %d 个。".formatted(stats.plansChecked(),stats.ordersCreated(),stats.plansSkipped())
@@ -59,22 +71,58 @@ public class SimulationScheduler {
             throw new SimulationException("SIM_RUN_FAILED","手动执行失败，已有订单与持仓保留，请稍后重试。");
         }
     }
-    private void run() {
-        Instant now=clock.instant(); repo.job("settlement","RUNNING","正在检查定投与待确认订单。",now,false);
+    void run() {
+        Instant now=clock.instant(); LocalDate today=now.atZone(SimulationCalendar.ZONE).toLocalDate();
+        String localRevision=repo.workRevision();
         var needs=repo.marketNeeds();
-        if(needs.isEmpty()) { repo.job("settlement","SUCCEEDED","后台正常，等待模拟交易或定投计划。",clock.instant(),true); return; }
-        var calendar=new SimulationCalendar(market.calendar()); LocalDate today=calendar.today(now);
-        var load=loadMarkets(needs,calendar,today,now); int failed=load.failed();
+        marketCache.keySet().retainAll(needs.keySet());
+        if(needs.isEmpty()) {
+            completedWork=null;
+            repo.job("settlement","SUCCEEDED","后台正常，等待模拟交易或定投计划。",now,true);
+            return;
+        }
+        List<Query> queries=needs.entrySet().stream().map(n->new Query(n.getKey(),n.getKey(),
+                n.getValue().isAfter(today)?today.minusDays(35):n.getValue().minusDays(7),today,"SIMULATION")).toList();
+        Map<String,MarketRevisionClient.Revision> versions=new HashMap<>(); String currentCalendar=null;
+        for(int i=0;i<queries.size();i+=50) {
+            var snapshot=revisions.read(queries.subList(i,Math.min(i+50,queries.size())));
+            if(currentCalendar!=null && !currentCalendar.equals(snapshot.calendarRevision()))
+                throw new IllegalStateException("CALENDAR_CHANGED_DURING_CHECK");
+            currentCalendar=snapshot.calendarRevision(); versions.putAll(snapshot.items());
+        }
+        // 日切、10点执行窗口、15点截止时需要检查，即使净值内容没有变化。
+        // 不按分钟改变工作版本；无新委托/行情时不会反复重算全部账户。
+        var time=now.atZone(SimulationCalendar.ZONE).toLocalTime();
+        int phase=time.isBefore(LocalTime.of(10,0))?0:time.isBefore(LocalTime.of(15,0))?1:2;
+        Object work=List.of(localRevision,today,phase,currentCalendar,queries,Map.copyOf(versions));
+        if(work.equals(completedWork)) return;
+        if(cachedCalendar==null || !currentCalendar.equals(calendarRevision)) {
+            cachedCalendar=new SimulationCalendar(market.calendar()); calendarRevision=currentCalendar;
+        }
+        repo.job("settlement","RUNNING","正在检查定投与待确认订单。",now,false);
+        Map<String,Market> data=new HashMap<>(); int failed=0;
+        for(Query query:queries) {
+            try {
+                String version=versions.get(query.key()).value(); CachedMarket cached=marketCache.get(query.key());
+                if(cached==null || !cached.query().equals(query) || !cached.revision().equals(version)) {
+                    cached=new CachedMarket(query,version,market.market(query.fundCode(),query.startDate(),query.endDate()));
+                    marketCache.put(query.key(),cached);
+                }
+                data.put(query.fundCode(),cached.data());
+            } catch(Exception error) { failed++; LOGGER.warn("SimulationScheduler.run   >>> 行情读取失败，fundCode={}",query.fundCode(),error); }
+        }
         UUID after=null; int users=0;
         while(true) {
             var batch=repo.workerUsers(after,50); if(batch.isEmpty()) break;
             for(UUID user : batch) {
-                try { service.processUser(user,calendar,load.data(),now); users++; }
+                try { service.processUser(user,cachedCalendar,data,now); users++; }
                 catch(Exception error) { failed++; LOGGER.error("SimulationScheduler.run   >>> account processing failed, accountId={}",user,error); }
             }
             after=batch.get(batch.size()-1);
         }
         repo.job("settlement",failed==0 ? "SUCCEEDED" : "PARTIAL",failed==0 ? "后台检查完成。" : "部分行情或账目待处理，已保留原记录。",clock.instant(),true);
+        // 使用执行前快照：执行期间发生的新委托/修订，下一轮仍会被发现。失败不推进，允许重试。
+        if(failed==0) completedWork=work;
         LOGGER.debug("SimulationScheduler.run   >>> accounts={}, failures={}",users,failed);
     }
     /** 手动补录与定时检查共用行情加载和逐用户锁；补录一期后立即走同一套结算确认。 */
@@ -83,7 +131,7 @@ public class SimulationScheduler {
         var needs=repo.marketNeeds();
         if(needs.isEmpty()) { repo.job("settlement","SUCCEEDED","后台正常，等待模拟交易或定投计划。",clock.instant(),true); return PlanRunStats.zero(); }
         var calendar=new SimulationCalendar(market.calendar()); LocalDate today=calendar.today(now);
-        var load=loadMarkets(needs,calendar,today,now); int failed=load.failed();
+        var load=loadMarkets(needs,today); int failed=load.failed();
         PlanRunStats total=PlanRunStats.zero(); UUID after=null; int users=0;
         while(true) {
             var batch=repo.workerUsers(after,50); if(batch.isEmpty()) break;
@@ -98,22 +146,14 @@ public class SimulationScheduler {
         return total;
     }
     private record MarketLoad(Map<String,Market> data,int failed) {}
-    private MarketLoad loadMarkets(Map<String,LocalDate> needs,SimulationCalendar calendar,LocalDate today,Instant now) {
+    private MarketLoad loadMarkets(Map<String,LocalDate> needs,LocalDate today) {
         Map<String,Market> data=new HashMap<>(); int failed=0;
         for(var need : needs.entrySet()) {
             String code=need.getKey();
             try {
                 LocalDate start=need.getValue().isAfter(today) ? today.minusDays(35) : need.getValue().minusDays(7);
                 Market info=market.market(code,start,today); data.put(code,info);
-                JobState refresh=repo.job("refresh:"+code);
-                boolean interval=refresh==null || Duration.between(refresh.attemptedAt(),now).toMinutes()>=30;
-                int hour=now.atZone(SimulationCalendar.ZONE).getHour();
-                // 深夜 0 点窗口兜底 22:00 之后公布的净值，保证当晚 24:00 前公布的净值当晚结算；次日 7 点继续兜底晚到数据。
-                boolean window=info.dividendsVerifiedAt()==null || hour==7 || hour==20 || hour==22 || hour==0 || info.refreshStatus().equals("FAILED");
-                if(interval && window) {
-                    repo.job("refresh:"+code,"REQUESTED","已请求核验公共净值与分红。",now,false);
-                    market.refresh(List.of(code));
-                }
+                // 公共净值和分红由手动同步更新；结算读取不能再偷偷启动采集。
             } catch(Exception error) { failed++; LOGGER.warn("SimulationScheduler.loadMarkets   >>> market unavailable, fundCode={}",code,error); }
         }
         return new MarketLoad(data,failed);

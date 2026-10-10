@@ -40,7 +40,7 @@ public class Direction1dStatistics {
         String rows=selection+"""
           , raw AS (
             SELECT f.protocol,f.forecast_id,f.fund_code,f.target_nav_date,s.branch_id,s.model_id,s.predicted_direction,
-              CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
+              CASE WHEN f.protocol IN ('DIRECTION_1D_V2','DIRECTION_1D_ANALYSIS_V1') THEN s.predicted_direction=o.actual_direction
                 ELSE (s.predicted_direction='UP')=(o.y=1) END AS correct,
               f.payload->>'group_id' AS group_id,f.payload->>'product_family_id' AS family,
               COALESCE(o.payload->>'event_status',f.payload->'input'->>'event_status') AS event_status,o.y,o.actual_direction,
@@ -73,7 +73,7 @@ public class Direction1dStatistics {
             avg(CASE WHEN valid AND protocol='DIRECTION_1D_V1' AND y=0 THEN CASE WHEN predicted_direction='NON_UP' THEN 1.0 ELSE 0.0 END END) AS non_up_recall,
             avg(CASE WHEN valid AND actual_direction='DOWN' THEN CASE WHEN predicted_direction='DOWN' THEN 1.0 ELSE 0.0 END END) AS down_recall,
             avg(CASE WHEN valid AND actual_direction='FLAT' THEN CASE WHEN predicted_direction='FLAT' THEN 1.0 ELSE 0.0 END END) AS flat_recall,
-            CASE WHEN protocol='DIRECTION_1D_V2' THEN (
+            CASE WHEN protocol IN ('DIRECTION_1D_V2','DIRECTION_1D_ANALYSIS_V1') THEN (
               avg(CASE WHEN valid AND actual_direction='UP' THEN CASE WHEN predicted_direction='UP' THEN 1.0 ELSE 0.0 END END)
               +avg(CASE WHEN valid AND actual_direction='DOWN' THEN CASE WHEN predicted_direction='DOWN' THEN 1.0 ELSE 0.0 END END)
               +avg(CASE WHEN valid AND actual_direction='FLAT' THEN CASE WHEN predicted_direction='FLAT' THEN 1.0 ELSE 0.0 END END))/3
@@ -119,9 +119,31 @@ public class Direction1dStatistics {
                 AND f.target_nav_date BETWEEN :start AND :end) AS verified_forecast_count
           FROM attempted
           """).param("u",user).param("start",start).param("end",end).query().singleRow();
-        return Map.of("branches",all.stream().filter(r->"TOTAL".equals(r.get("kind"))).toList(),
+        // 新分析分别保留目标日前与目标日的代表记录，避免盘中资料较多的结果混入前夜观察。
+        var phases=db.sql("""
+          WITH ranked AS (
+            SELECT f.forecast_id,f.payload->>'analysis_phase' AS phase,
+              row_number() OVER(PARTITION BY f.fund_code,f.target_nav_date,f.payload->>'analysis_phase'
+                ORDER BY f.revision_sequence %s,f.stored_at %s,f.forecast_id %s) AS choice
+            FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+            JOIN direction_1d_forecast_receipt r USING(forecast_id)
+            WHERE u.user_id=:u AND f.protocol='DIRECTION_1D_ANALYSIS_V1' AND r.status='VERIFIED'
+              AND r.content_hash=f.content_hash AND encode(sha256(convert_to(f.payload_json,'UTF8')),'hex')=f.content_hash
+              AND f.target_nav_date BETWEEN :start AND :end
+          )
+          SELECT r.phase,count(*) FILTER(WHERE o.y IS NOT NULL) assessed_count,
+            count(*) FILTER(WHERE o.y IS NULL) pending_count,
+            count(*) FILTER(WHERE s.predicted_direction=o.actual_direction) correct_count
+          FROM ranked r JOIN direction_1d_forecast f USING(forecast_id)
+          JOIN direction_1d_forecast_score s ON s.forecast_id=f.forecast_id AND s.branch_id='PRIMARY'
+          LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
+          WHERE r.choice=1 GROUP BY r.phase ORDER BY r.phase
+          """.formatted(order,order,order).replace("o.revision_no=1","o.revision_no="+answer))
+            .param("u",user).param("start",start).param("end",end).query().listOfRows();
+        Map<String,Object> result=new LinkedHashMap<>(Map.of("branches",all.stream().filter(r->"TOTAL".equals(r.get("kind"))).toList(),
                 "strata",all.stream().filter(r->!"TOTAL".equals(r.get("kind"))).limit(1000).toList(),"strataTruncated",all.size()>1000,
                 "paired",pairs,"coverage",coverage,"startDate",start,"endDate",end,"labelBasis",labelBasis,"predictionBasis",predictionBasis,
-                "observationNote","少于20个不同目标日属于很短观察期；60日后才适合更完整分析，均不自动发布。");
+                "observationNote","少于20个不同目标日属于很短观察期；60日后才适合更完整分析，均不自动发布。"));
+        result.put("analysisPhases",phases);return result;
     }
 }

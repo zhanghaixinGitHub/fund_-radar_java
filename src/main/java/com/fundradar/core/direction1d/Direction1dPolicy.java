@@ -25,6 +25,8 @@ public final class Direction1dPolicy {
         try {
             if(raw.length()>150_000 || !hash(raw).equals(hash)) throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
             JsonNode p=json.readTree(raw);
+            if(Direction1dAnalysisPolicy.PROTOCOL.equals(p.path("protocol").asText()))
+                return Direction1dAnalysisPolicy.validate(p,expectedCode,now);
             if(p.has("revision_sequence") || p.has("input_identity")) {
                 if(!p.path("revision_sequence").isIntegralNumber() || !p.path("revision_sequence").canConvertToLong()
                         || p.path("revision_sequence").asLong()<=0
@@ -53,6 +55,7 @@ public final class Direction1dPolicy {
                     || generated.isBefore(open) || !generated.isBefore(deadline) || generated.isAfter(now.plusSeconds(5)))
                 throw new IllegalArgumentException("INVALID_WINDOW");
             JsonNode input=p.path("input");
+            boolean eventEvidence="002112_EVENT_EVIDENCE_V2".equals(input.path("feature_version").asText());
             if(input.path("values").size()!=61 || input.path("features").size()!=7
                     || !input.path("values").get(60).path("nav_date").asText().equals(t.toString())
                     || instant(input,"feature_as_of").isAfter(generated)
@@ -66,6 +69,71 @@ public final class Direction1dPolicy {
             }
             if(!p.path("input_json").isTextual() || (!hash(p.path("input_json").asText()).equals(p.path("input_hash").asText())
                     || !json.readTree(p.path("input_json").asText()).equals(input))) throw new IllegalArgumentException("INPUT_HASH_MISMATCH");
+            // 002112综合输入仍包含原7项净值；扩展部分必须明确声明并与同一份原文绑定。
+            // 不放宽其他基金的输入，也不把缺新闻误作已取得全量消息。
+            if(input.has("information") || "002112_FULL_INFORMATION_V1".equals(input.path("feature_version").asText())) {
+                JsonNode information=input.path("information"),numeric=information.path("numeric");
+                if(!ternary || !"002112".equals(expectedCode)
+                        || !(eventEvidence || "002112_FULL_INFORMATION_V1".equals(input.path("feature_version").asText()))
+                        || !input.path("feature_version").equals(information.path("version"))
+                        || !numeric.isArray() || numeric.size()!=87 || !information.path("text").isTextual()
+                        || information.path("text").asText().length()>25000
+                        || !information.path("source_identity").asText().matches("[a-f0-9]{64}")
+                        || !information.path("market_date").asText().equals(t.toString())
+                        || !information.path("sources").isArray() || information.path("sources").size()>48)
+                    throw new IllegalArgumentException("INVALID_INFORMATION_INPUT");
+                for(int i=0;i<numeric.size();i++) {
+                    JsonNode value=numeric.get(i);
+                    if((!value.isNull() && (!value.isNumber() || !Double.isFinite(value.asDouble())))
+                            || (i<7 && (!value.isNumber() || value.asDouble()!=input.path("features").get(i).asDouble())))
+                        throw new IllegalArgumentException("INVALID_INFORMATION_INPUT");
+                }
+                for(JsonNode item:information.path("sources")) {
+                    if(!Set.of("ANNOUNCEMENT","NEWS","POLICY").contains(item.path("kind").asText())
+                            || !item.path("source_hash").asText().matches("[a-f0-9]{64}")
+                            || instant(item,"available_at").isAfter(instant(input,"feature_as_of")))
+                        throw new IllegalArgumentException("INVALID_INFORMATION_SOURCE");
+                }
+                if(eventEvidence) {
+                    // 拒判也是一条可核验的完整结果，不能因为没有方向就退回旧预测。
+                    JsonNode evidence=information.path("event_evidence"),items=evidence.path("events"),values=evidence.path("values");
+                    if(!"002112_EVENT_EVIDENCE_V2".equals(evidence.path("version").asText())
+                            || !items.isArray() || items.size()>32 || !values.isArray() || values.size()!=4
+                            || !evidence.path("overflow").isBoolean()) throw new IllegalArgumentException("INVALID_EVENT_EVIDENCE");
+                    double[] totals=new double[4]; double positive=0,negative=0;
+                    for(JsonNode event:items) {
+                        int index=switch(event.path("field").asText()) {
+                            case "announcement_realized" -> 0; case "announcement_forecast" -> 1;
+                            case "policy_implemented" -> 2; case "news_realized" -> 3;
+                            default -> -1;
+                        };
+                        double effect=event.path("value").asDouble(Double.NaN),weight=event.path("weight").asDouble(Double.NaN);
+                        if(index<0 || !Double.isFinite(effect) || !Double.isFinite(weight) || weight<=0 || weight>1
+                                || !event.path("source_hash").asText().matches("[a-f0-9]{64}")
+                                || !event.path("report_hash").asText().matches("[a-f0-9]{64}")
+                                || event.path("quote").asText().isBlank() || event.path("quote").asText().length()>600
+                                || !event.path("code").asText().matches("[0-9]{6}\\.(SH|SZ|BJ)")
+                                || !Set.of("ISSUER","PRODUCT").contains(event.path("relation").asText())
+                                || !Set.of("BENEFIT","PRESSURE").contains(event.path("direction").asText())
+                                || (effect>0)!= "BENEFIT".equals(event.path("direction").asText())
+                                || instant(event,"available_at").isAfter(instant(input,"feature_as_of"))
+                                || instant(event,"report_available_at").isAfter(instant(input,"feature_as_of"))
+                                || LocalDate.parse(event.path("published_date").asText()).isAfter(instant(input,"feature_as_of").atZone(ZONE).toLocalDate()))
+                            throw new IllegalArgumentException("INVALID_EVENT_SOURCE");
+                        int age=event.path("age_sessions").asInt(-1);
+                        if(age<0 || age>=5 || Math.abs(Math.abs(effect)-weight*100*Math.pow(2,-age/2.0))>1e-10)
+                            throw new IllegalArgumentException("INVALID_EVENT_WEIGHT");
+                        totals[index]+=effect; positive+=Math.max(effect,0); negative+=Math.max(-effect,0);
+                    }
+                    for(int i=0;i<4;i++) if(!values.get(i).isNumber() || Math.abs(values.get(i).asDouble()-totals[i])>1e-10)
+                        throw new IllegalArgumentException("INVALID_EVENT_TOTAL");
+                    if(!Double.isFinite(evidence.path("positive").asDouble(Double.NaN))
+                            || !Double.isFinite(evidence.path("negative").asDouble(Double.NaN))
+                            || Math.abs(evidence.path("positive").asDouble(Double.NaN)-positive)>1e-10
+                            || Math.abs(evidence.path("negative").asDouble(Double.NaN)-negative)>1e-10)
+                        throw new IllegalArgumentException("INVALID_EVENT_TOTAL");
+                }
+            }
             Set<String> branches=new HashSet<>(); int available=0;
             String activation=p.path("activation_policy").asText("BEFORE_WINDOW_V1");
             if(!Set.of("BEFORE_WINDOW_V1",ACTIVATION_POLICY).contains(activation))
@@ -73,8 +141,31 @@ public final class Direction1dPolicy {
             for(JsonNode b:p.path("branches")) {
                 if(!Set.of("FIXED","WEEKLY").contains(b.path("branch_id").asText()) || !branches.add(b.path("branch_id").asText()))
                     throw new IllegalArgumentException("INVALID_BRANCH");
+                boolean abstained="ABSTAINED".equals(b.path("status").asText());
+                if(abstained || (eventEvidence && "AVAILABLE".equals(b.path("status").asText()))) {
+                    JsonNode decision=b.path("decision"),reasons=decision.path("reason_codes");
+                    if(!eventEvidence || !"002112_EVENT_EVIDENCE_V2".equals(decision.path("policy").asText())
+                            || !reasons.isArray() || reasons.size()>9 || abstained==reasons.isEmpty())
+                        throw new IllegalArgumentException("INVALID_EVENT_DECISION");
+                    for(JsonNode reason:reasons) if(!Set.of("NO_DIRECTIONAL_EVENT","EVENT_CONFLICT","MARKET_EVENT_CONFLICT",
+                            "WEAK_SIGNAL","EVENT_MODEL_CONFLICT","EVENT_LIMIT","MARKET_INCOMPLETE","MODEL_UNSUPPORTED",
+                            "VALIDATION_INSUFFICIENT").contains(reason.asText()))
+                        throw new IllegalArgumentException("INVALID_EVENT_REASON");
+                    if(abstained) {
+                        if(!b.path("score").isNull() || !b.path("predicted_direction").isNull() || !b.path("class_scores").isNull()
+                                || !b.path("model_hash").asText().matches("[a-f0-9]{64}")
+                                || !instant(b,"trained_at").isBefore(generated)
+                                || instant(b,"trained_at").isAfter(instant(b,"registered_at"))
+                                || instant(b,"registered_at").isAfter(instant(b,"model_selected_at"))
+                                || instant(b,"model_selected_at").isAfter(generated)) throw new IllegalArgumentException("INVALID_ABSTENTION");
+                        UUID.fromString(b.path("model_id").asText()); available++;
+                    }
+                }
                 if("AVAILABLE".equals(b.path("status").asText())) {
                     double s=b.path("score").asDouble(Double.NaN);
+                    if(eventEvidence && (s<0.6 || input.path("information").path("event_evidence").path("events").isEmpty()
+                            || input.path("information").path("event_evidence").path("overflow").asBoolean()))
+                        throw new IllegalArgumentException("EVENT_DIRECTION_UNSUPPORTED");
                     if(!Double.isFinite(s)||s<0||s>1 || !b.path("model_hash").asText().matches("[a-f0-9]{64}")
                             || !b.path("predicted_direction").asText().equals(ternary?threeStateWinner(b):s>.5?"UP":"NON_UP")
                             || !instant(b,"trained_at").isBefore(generated)) throw new IllegalArgumentException("INVALID_MODEL");
@@ -98,6 +189,9 @@ public final class Direction1dPolicy {
     /** 独立验算Python答案原文和十进制标签；修订只能新增，首次口径仍由归档顺序确定。 */
     public static void validateLabel(ObjectMapper json,JsonNode envelope,JsonNode original,Instant now) {
         try {
+            if(Direction1dAnalysisPolicy.PROTOCOL.equals(original.path("protocol").asText())) {
+                Direction1dAnalysisPolicy.validateLabel(json,envelope,original,now);return;
+            }
             String raw=envelope.path("payload_json").asText(); JsonNode p=envelope.path("payload");
             if(raw.length()>150_000 || !hash(raw).equals(envelope.path("content_hash").asText())
                     || !json.readTree(raw).equals(p)) throw new IllegalArgumentException("LABEL_HASH_MISMATCH");

@@ -413,6 +413,23 @@ public class SimulationRepository {
             """).query((r,n) -> { result.put(r.getString(1),r.getObject(2,LocalDate.class)); return 0; }).list();
         return result;
     }
+    /**
+     * 本地工作版本只取委托、计划、费用、待核对问题与账户启停；不包含估值更新时间，避免计算自身触发循环。
+     * 只返回一个摘要，新增/撤销订单、修改计划或费率均能唤醒结算，历史行情仍按公共版本复用。
+     */
+    public String workRevision() {
+        return db.sql("""
+            SELECT md5(concat_ws('|',
+              (SELECT string_agg(concat_ws(':',order_id,status,request_hash),'|' ORDER BY order_id) FROM sim_order),
+              (SELECT string_agg(concat_ws(':',plan_id,version,status,scheduled_date,execution_date),
+                  '|' ORDER BY plan_id) FROM sim_plan),
+              (SELECT string_agg(concat_ws(':',rule_id,version,updated_at),'|' ORDER BY rule_id) FROM sim_fee_rule),
+              (SELECT string_agg(concat_ws(':',user_id,fund_code,issue),'|' ORDER BY user_id,fund_code)
+                  FROM sim_position WHERE issue IS NOT NULL),
+              (SELECT string_agg(concat_ws(':',a.user_id,u.status),'|' ORDER BY a.user_id)
+                  FROM sim_account a JOIN user_account u ON u.user_id=a.user_id)))
+            """).query(String.class).single();
+    }
     public JobState job(String name) {
         return db.sql("SELECT * FROM sim_job_state WHERE job_name=:name").param("name",name).query((r,n) -> new JobState(r.getString("status"),
                 instant(r,"attempted_at"),instant(r,"completed_at"),r.getString("message"))).optional().orElse(null);

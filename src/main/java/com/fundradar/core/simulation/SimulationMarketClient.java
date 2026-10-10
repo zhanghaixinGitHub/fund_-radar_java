@@ -8,9 +8,12 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.HttpClientErrorException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import static com.fundradar.core.simulation.SimulationTypes.*;
 
 /** 独立的公共结算资料接口，不复用关注详情授权，也不向 Python 发送个人数据。 */
@@ -38,16 +41,63 @@ public class SimulationMarketClient {
             throw new SimulationException(failure.code(),failure.summary()+" 请求号："+failure.traceId());
         }
     }
+    /**
+     * 读取模拟结算资料并记录跨服务耗时；日期是所需净值区间，耗时单位为毫秒。
+     * 定时任务没有 HTTP 请求上下文时补充请求号，并在发送、日志和异常中复用同一个值。
+     * 完成后恢复原 MDC，避免调度线程复用时把请求号串到其他任务。
+     */
     public Market market(String code, LocalDate start, LocalDate end) {
+        String previousTrace = MDC.get(TraceContext.TRACE_ID_KEY);
+        String traceId = previousTrace == null || previousTrace.isBlank() ? UUID.randomUUID().toString() : previousTrace;
+        long started = System.nanoTime();
+        MDC.put(TraceContext.TRACE_ID_KEY, traceId);
+        LOGGER.debug("SimulationMarketClient.market   >>> phase=start traceId={} fundCode={} startDate={} endDate={} readTimeoutMs={}",
+                traceId, code, start, end, properties.getReadTimeout().toMillis());
         try {
             var result = client.get().uri(builder -> builder.path("/internal/v1/simulation/funds/{code}")
                     .queryParam("startDate",start).queryParam("endDate",end).build(code))
-                    .header("X-Service-Token",properties.getToken()).header("X-Trace-Id",TraceContext.getTraceId())
+                    .header("X-Service-Token",properties.getToken()).header("X-Trace-Id",traceId)
                     .retrieve().body(Market.class);
             if (result == null || !code.equals(result.fundCode())) throw unavailable();
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            // 正常逐基金查询只在 DEBUG 记录；慢调用保留 WARN，不输出行情或个人账目。
+            if (elapsedMs >= 1000) {
+                LOGGER.warn("SimulationMarketClient.market   >>> phase=end traceId={} fundCode={} outcome=slow_success elapsedMs={}",
+                        traceId, code, elapsedMs);
+            } else {
+                LOGGER.debug("SimulationMarketClient.market   >>> phase=end traceId={} fundCode={} outcome=success elapsedMs={}",
+                        traceId, code, elapsedMs);
+            }
             return result;
-        } catch (HttpClientErrorException.NotFound error) { throw new SimulationException("SIM_NOT_FOUND","未找到已登记的基金资料。"); }
-        catch (RuntimeException error) { LOGGER.warn("SimulationMarketClient.market   >>> public market unavailable, fundCode={}",code,error); throw unavailable(); }
+        } catch (HttpClientErrorException.NotFound error) {
+            logMarketFailure(traceId, code, start, end, started, error);
+            throw new SimulationException("SIM_NOT_FOUND","未找到已登记的基金资料。");
+        } catch (RuntimeException error) {
+            logMarketFailure(traceId, code, start, end, started, error);
+            throw unavailable();
+        } finally {
+            if (previousTrace == null) MDC.remove(TraceContext.TRACE_ID_KEY);
+            else MDC.put(TraceContext.TRACE_ID_KEY, previousTrace);
+        }
+    }
+
+    /** 保留异常类型、根因和调用堆栈，不把 HTTP 错误响应原文、URL 或凭据复制到新增日志。 */
+    private void logMarketFailure(String traceId, String code, LocalDate start, LocalDate end,
+                                  long started, RuntimeException error) {
+        LOGGER.warn("SimulationMarketClient.market   >>> phase=end traceId={} fundCode={} startDate={} endDate={} "
+                        + "outcome=failed elapsedMs={} readTimeoutMs={} errorType={}",
+                traceId, code, start, end, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
+                properties.getReadTimeout().toMillis(), error.getClass().getSimpleName(), safeStack(error, 0));
+    }
+
+    /** 有界复制异常链，只保留类型与堆栈位置，避免异常消息携带服务端响应或敏感参数。 */
+    private RuntimeException safeStack(Throwable error, int depth) {
+        var safe = new RuntimeException(error.getClass().getName());
+        safe.setStackTrace(error.getStackTrace());
+        if (error.getCause() != null && error.getCause() != error && depth < 8) {
+            safe.initCause(safeStack(error.getCause(), depth + 1));
+        }
+        return safe;
     }
     public void refresh(List<String> codes) {
         if (codes.isEmpty()) return;

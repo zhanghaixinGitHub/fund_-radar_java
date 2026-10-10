@@ -48,7 +48,8 @@ public class Direction1dService {
         var coverage=client.coverage(List.of(code)); var result=new LinkedHashMap<String,Object>();
         result.put("coverage",Direction1dPolicy.view(coverage.path("items").get(0)));
         result.put("window",Direction1dPolicy.view(coverage.path("window")));
-        result.put("history",repo.currentHistory(user,code));
+        boolean analysis="002112".equals(code)&&"CN_002112_ANALYSIS".equals(coverage.path("items").get(0).path("group_id").asText());
+        result.put("history",analysis?repo.currentHistory(user,code,Direction1dAnalysisPolicy.PROTOCOL):repo.currentHistory(user,code));
         return result;
     }
     /** 按原预测读取可核对的指标作用；基金、本人权限与两端原文字节必须一致。 */

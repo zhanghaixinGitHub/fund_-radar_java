@@ -36,6 +36,15 @@ public class InternalDirection1dSyncController {
         return batch.generate(code,LocalDate.parse(body.get("targetNavDate")));
     }
 
+    /** 只完成指定原作业的状态核对与留档，不重复提交分析；禁止浏览器和注入账号范围。 */
+    @PostMapping("/{code}/jobs/{jobId}/reconcile")
+    public Map<String,Object> reconcile(HttpServletRequest request,@PathVariable String code,@PathVariable UUID jobId,
+            @RequestBody Map<String,String> body) {
+        authenticate(request);
+        if(!body.keySet().equals(Set.of("targetNavDate"))) throw new IllegalArgumentException("INVALID_PREDICTION_SCOPE");
+        return batch.reconcile(code,LocalDate.parse(body.get("targetNavDate")),jobId);
+    }
+
     private void authenticate(HttpServletRequest request) {
         String expected=properties.getToken(),supplied=request.getHeader("X-Service-Token");
         if(request.getHeader("Origin")!=null || request.getHeader("Sec-Fetch-Site")!=null

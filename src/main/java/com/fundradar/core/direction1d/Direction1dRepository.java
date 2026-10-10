@@ -98,21 +98,45 @@ public class Direction1dRepository {
           ) latest WHERE status IN ('QUEUED','RUNNING')
           """).param("code",code).param("target",target).query(UUID.class).optional().orElse(null);
     }
+    /** 只续接原作业已登记的账号范围，按快照分页；新增关注者不能借状态查询扩大处理范围。 */
+    public List<Map<String,Object>> syncJobScopes(String code,LocalDate target,UUID job,UUID after) {
+        return db.sql("""
+          SELECT DISTINCT s.snapshot_id,s.user_id FROM direction_1d_attempt a
+          JOIN direction_1d_scope_snapshot s ON s.snapshot_id=a.scope_snapshot_id
+          JOIN user_account u ON u.user_id=s.user_id
+          JOIN watchlist_item w ON w.user_id=u.user_id AND w.fund_code=a.fund_code
+          WHERE a.fund_code=:code AND a.target_nav_date=:target AND s.target_nav_date=:target
+            AND a.source_job_id=:job AND (:after::uuid IS NULL OR s.snapshot_id>:after) AND
+          """+ELIGIBLE_USER+" ORDER BY s.snapshot_id LIMIT 50")
+                .param("code",code).param("target",target).param("job",job).param("after",after).query().listOfRows();
+    }
+    /** 回填可变的执行状态，不改原预测和原尝试时间，避免旧作业的收尾遮蔽后来创建的任务。 */
+    public void finishSyncJob(String code,LocalDate target,UUID job,String state,String reason) {
+        db.sql("""
+          UPDATE direction_1d_attempt SET status=:state,reasons=CAST(:reasons AS jsonb),next_retry_at=NULL
+          WHERE fund_code=:code AND target_nav_date=:target AND source_job_id=:job AND status IN ('QUEUED','RUNNING')
+          """).param("code",code).param("target",target).param("job",job).param("state",state)
+                .param("reasons",encode(reason==null?List.of():List.of(reason))).update();
+    }
     private UUID currentPublic(String code,LocalDate target,String protocol) {
         return db.sql("SELECT forecast_id FROM direction_1d_current WHERE fund_code=:code AND target_nav_date=:target AND protocol=:protocol")
                 .param("code",code).param("target",target).param("protocol",protocol).query(UUID.class).optional().orElse(null);
     }
     /** 最新日期同日并存两版时优先三分类；历史游标排序不改变，旧记录仍完整保留。 */
     public Map<String,Object> currentHistory(UUID user,String code) {
+        return currentHistory(user,code,Direction1dPolicy.ACTIVE_PROTOCOL);
+    }
+    public Map<String,Object> currentHistory(UUID user,String code,String protocol) {
         UUID id=db.sql("""
           SELECT f.forecast_id FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
           JOIN direction_1d_forecast_receipt r USING(forecast_id)
           LEFT JOIN direction_1d_current c ON c.protocol=f.protocol AND c.fund_code=f.fund_code
             AND c.target_nav_date=f.target_nav_date
           WHERE u.user_id=:user AND f.fund_code=:code AND r.status='VERIFIED'
+            AND (:protocol='DIRECTION_1D_ANALYSIS_V1' OR f.protocol<>'DIRECTION_1D_ANALYSIS_V1')
           ORDER BY f.target_nav_date DESC,(f.protocol=:protocol) DESC,
             (c.forecast_id=f.forecast_id) DESC NULLS LAST,f.revision_sequence DESC,f.stored_at DESC,f.forecast_id DESC LIMIT 1
-          """).param("user",user).param("code",code).param("protocol",Direction1dPolicy.ACTIVE_PROTOCOL)
+          """).param("user",user).param("code",code).param("protocol",protocol)
                 .query(UUID.class).optional().orElse(null);
         return Map.of("items",id==null?List.of():List.of(detail(user,id)),"page",1,"pageSize",1,"totalCount",id==null?0:1);
     }
@@ -148,7 +172,13 @@ public class Direction1dRepository {
                     .param("generated",Timestamp.from(Direction1dPolicy.instant(p,"generated_at")))
                     .param("sequence",p.path("revision_sequence").asLong(0))
                     .param("identity",p.path("input_identity").asText(null)).update();
-            for(JsonNode b:p.path("branches")) saveScore(id,b,false);
+            if(Direction1dAnalysisPolicy.PROTOCOL.equals(p.path("protocol").asText())) {
+                // 单一综合方向只作统计投影，没有训练模型和概率。
+                db.sql("""
+                  INSERT INTO direction_1d_forecast_score(forecast_id,branch_id,predicted_direction,status)
+                  VALUES(:id,'PRIMARY',:direction,'AVAILABLE')
+                  """).param("id",id).param("direction",p.path("analysis").path("direction").asText()).update();
+            } else for(JsonNode b:p.path("branches")) saveScore(id,b,false);
             for(JsonNode b:p.path("baselines")) saveScore(id,b,true);
             return new ArchivedForecast(id,true);
         });
@@ -212,10 +242,20 @@ public class Direction1dRepository {
     }
     public List<Map<String,Object>> reviewPage(UUID after) {
         return db.sql("""
-          SELECT forecast_id,source_job_id FROM direction_1d_forecast
-          WHERE target_nav_date<=(clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date
-            AND (:after::uuid IS NULL OR forecast_id>:after) ORDER BY forecast_id LIMIT 50
+          SELECT f.forecast_id,f.source_job_id,f.fund_code,f.base_nav_date,f.target_nav_date,c.market_revision,
+            EXISTS(SELECT 1 FROM direction_1d_outcome o WHERE o.forecast_id=f.forecast_id) AS has_outcome
+          FROM direction_1d_forecast f LEFT JOIN direction_1d_review_checkpoint c USING(forecast_id)
+          WHERE f.target_nav_date<=(clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date
+            AND (f.payload->>'expires_at')::timestamptz>clock_timestamp()
+            AND (:after::uuid IS NULL OR f.forecast_id>:after) ORDER BY f.forecast_id LIMIT 50
           """).param("after",after).query().listOfRows();
+    }
+    /** 结果持久化、需要的学习回执均成功后才调用；失败保留原水位，下轮可重试。 */
+    public void reviewed(UUID forecast,String revision) {
+        db.sql("""
+          INSERT INTO direction_1d_review_checkpoint(forecast_id,market_revision) VALUES(:id,:revision)
+          ON CONFLICT(forecast_id) DO UPDATE SET market_revision=EXCLUDED.market_revision,checked_at=clock_timestamp()
+          """).param("id",forecast).param("revision",revision).update();
     }
     public void outcome(UUID id,JsonNode label) {
         JsonNode p=label.path("payload");
@@ -298,7 +338,7 @@ public class Direction1dRepository {
               AND f.generated_at<f.deadline_at AND f.stored_at<f.deadline_at AND r.receipt_verified_at<f.deadline_at)
           SELECT f.protocol,s.branch_id,count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS assessed_count,
             count(*) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL AND
-              CASE WHEN f.protocol='DIRECTION_1D_V2' THEN s.predicted_direction=o.actual_direction
+              CASE WHEN f.protocol IN ('DIRECTION_1D_V2','DIRECTION_1D_ANALYSIS_V1') THEN s.predicted_direction=o.actual_direction
               ELSE (s.predicted_direction='UP')=(o.y=1) END) AS correct_count,
             count(DISTINCT f.target_nav_date) FILTER(WHERE r.status='VERIFIED' AND o.y IS NOT NULL) AS distinct_target_dates,
             count(*) FILTER(WHERE o.y IS NULL) AS pending_count,
