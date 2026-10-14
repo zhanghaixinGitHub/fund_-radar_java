@@ -133,7 +133,7 @@ public class Direction1dRepository {
           LEFT JOIN direction_1d_current c ON c.protocol=f.protocol AND c.fund_code=f.fund_code
             AND c.target_nav_date=f.target_nav_date
           WHERE u.user_id=:user AND f.fund_code=:code AND r.status='VERIFIED'
-            AND (:protocol='DIRECTION_1D_ANALYSIS_V1' OR f.protocol<>'DIRECTION_1D_ANALYSIS_V1')
+            AND f.protocol=:protocol
           ORDER BY f.target_nav_date DESC,(f.protocol=:protocol) DESC,
             (c.forecast_id=f.forecast_id) DESC NULLS LAST,f.revision_sequence DESC,f.stored_at DESC,f.forecast_id DESC LIMIT 1
           """).param("user",user).param("code",code).param("protocol",protocol)

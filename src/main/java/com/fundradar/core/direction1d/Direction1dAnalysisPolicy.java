@@ -22,7 +22,12 @@ public final class Direction1dAnalysisPolicy {
     /** 模型说明的单段字数仅作整理目标；Python保留全文，Java不因超过旧篇幅判整包失败。 */
     private static boolean analysisText(JsonNode node) { return node.isTextual()&&!node.asText().isBlank(); }
     public static JsonNode validate(JsonNode p,String code,Instant now) {
-        require("002112".equals(code)&&code.equals(p.path("fund_code").asText())
+        boolean unified="COMPREHENSIVE".equals(p.path("generationMethod").asText())
+            &&"FUND_COMPREHENSIVE_REVIEW_V1".equals(p.path("analysisPolicyVersion").asText())
+            &&p.path("analysisPolicyHash").asText().matches("[a-f0-9]{64}")
+            &&"CODEX_ASSISTED_REVIEW".equals(p.path("generation_source").asText());
+        // 旧002112原文继续可核验；其他基金必须携带统一规则与聊天审阅来源，不借机放开统计原文。
+        require(("002112".equals(code)||unified)&&code.matches("[0-9]{6}")&&code.equals(p.path("fund_code").asText())
             &&PROTOCOL.equals(p.path("schema_version").asText())&&p.path("horizon_trading_days").asInt()==1
             &&"FORWARD_ORIGINAL".equals(p.path("kind").asText())
             &&"UNIT_NAV_DIRECTION_THREE_STATE_V2".equals(p.path("target_definition").asText())
@@ -38,14 +43,14 @@ public final class Direction1dAnalysisPolicy {
             &&!asOf.isBefore(open)&&!generated.isBefore(asOf)&&generated.isBefore(deadline)&&!generated.isAfter(now.plusSeconds(5))
             &&at(p,"expires_at").isAfter(generated),"ANALYSIS_WINDOW_INVALID");
         require(p.path("revision_sequence").isIntegralNumber()&&p.path("revision_sequence").asLong()>0
-            &&p.path("task_key").asText().equals(PROTOCOL+":002112:"+target+":r"+p.path("revision_sequence").asLong())
+            &&p.path("task_key").asText().equals(PROTOCOL+":"+code+":"+target+":r"+p.path("revision_sequence").asLong())
             &&p.path("input_identity").asText().matches("[a-f0-9]{64}")
             &&p.path("input_hash").asText().matches("[a-f0-9]{64}")
             &&p.path("input_hash").equals(p.path("snapshot_hash")),"ANALYSIS_IDENTITY_INVALID");
         UUID.fromString(p.path("input_snapshot_id").asText());
         require(text(p.path("cohort_id"),80)&&text(p.path("fund_name"),160),"ANALYSIS_IDENTITY_INVALID");
         JsonNode input=p.path("input"),values=input.path("values");
-        require("002112".equals(input.path("fund_code").asText())&&values.isArray()&&values.size()<=61
+        require(code.equals(input.path("fund_code").asText())&&values.isArray()&&values.size()<=61
             &&at(input,"feature_as_of").equals(asOf),"ANALYSIS_INPUT_INVALID");
         UUID.fromString(input.path("source_id").asText());
         LocalDate previous=null;

@@ -31,8 +31,15 @@ public class MultiPredictionService {
     public JsonNode currentFor(UUID user,String code) {
         owns(user,code);
         var value=client.get("/funds/"+code);
-        for(var prediction:value.path("predictions")) link(user,code,prediction);
-        return value;
+        // 即使Python进程尚未更新，Java也不能把旧净值结果继续作为当前综合判断返回。
+        var result=(com.fasterxml.jackson.databind.node.ObjectNode)value.deepCopy();
+        var accepted=json.createArrayNode();
+        for(var prediction:value.path("predictions")) {
+            if(!"COMPREHENSIVE".equals(prediction.path("generationMethod").asText())) continue;
+            link(user,code,prediction);accepted.add(prediction);
+        }
+        result.set("predictions",accepted);
+        return result;
     }
     private void link(UUID user,String code,JsonNode prediction) {
         if(!code.equals(prediction.path("fundCode").asText())) throw new IllegalStateException("公共预测基金不匹配");
@@ -48,6 +55,21 @@ public class MultiPredictionService {
         if(before!=null) java.time.Instant.parse(before);
         return client.get("/funds/"+code+"/history?limit=30"+(before==null?"":"&before="+java.net.URLEncoder.encode(before,java.nio.charset.StandardCharsets.UTF_8))
                 +(beforeId==null?"":"&beforeId="+beforeId));
+    }
+    /** 回看只作为历史资料返回；不得写公共预测引用或提交到期对错核验。 */
+    public JsonNode analysisReviews(String code,String before,UUID beforeId) {
+        owns(user(false),code);
+        if((before==null)!=(beforeId==null)) throw new IllegalArgumentException("回看分页参数不完整");
+        if(before!=null) java.time.Instant.parse(before);
+        var result=client.get("/funds/"+code+"/analysis-reviews"+(before==null?"":"?before="
+                +java.net.URLEncoder.encode(before,java.nio.charset.StandardCharsets.UTF_8)+"&beforeId="+beforeId));
+        for(var item:result.path("items")) {
+            if(!code.equals(item.path("fundCode").asText())
+                    || !"COMPREHENSIVE_ASOF_REVIEW".equals(item.path("recordType").asText())
+                    || !item.path("excludedFromAccuracy").asBoolean())
+                throw new IllegalStateException("回看资料与当前基金不一致");
+        }
+        return result;
     }
     /** 只解释本人当前关注基金的公共原预测；Python 按编号、基金及原文摘要再次核对。 */
     public JsonNode narrative(String code,UUID predictionId) {

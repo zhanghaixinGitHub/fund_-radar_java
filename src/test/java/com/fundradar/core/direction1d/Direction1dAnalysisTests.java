@@ -41,6 +41,17 @@ class Direction1dAnalysisTests {
     }
     void validate(ObjectNode p) {String raw=p.toString();Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),"002112",now);}
     @Test void missingLatestNavStillKeepsFixedComparisonDate() throws Exception {assertDoesNotThrow(()->validate(payload()));}
+    /** 其他基金必须有统一规则身份；更换代码、来源或规则摘要均不能借旧试点豁免。 */
+    @Test void allFundsUseComprehensiveIdentity() throws Exception {
+        var p=payload();p.put("fund_code","016008");((ObjectNode)p.path("input")).put("fund_code","016008");
+        p.put("task_key","DIRECTION_1D_ANALYSIS_V1:016008:2026-10-12:r1");
+        assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(p,"016008",now));
+        p.put("generationMethod","COMPREHENSIVE");p.put("analysisPolicyVersion","FUND_COMPREHENSIVE_REVIEW_V1");
+        p.put("analysisPolicyHash","c".repeat(64));p.put("generation_source","CODEX_ASSISTED_REVIEW");
+        assertDoesNotThrow(()->Direction1dAnalysisPolicy.validate(p,"016008",now));
+        p.put("analysisPolicyHash","bad");
+        assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(p,"016008",now));
+    }
     /** 经理背景沿用同一份原事实与来源契约；前端说明不得另行改写离任原因或任期表现。 */
     @Test void managerEvidenceKeepsExactNarrativeAndSource() throws Exception {
         var p=payload();

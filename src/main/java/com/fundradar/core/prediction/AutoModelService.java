@@ -57,6 +57,8 @@ public class AutoModelService {
     }
     /** 由唯一维护入口及成功同步回调调用；后台范围从数据库取得，浏览器不可指定其他账户。 */
     public void check(String source) {
+        // 产品预测已经统一为资料综合审阅；保留旧研究台账，但不再自动训练或采用净值候选。
+        if(comprehensiveOnly()) return;
         try {
             var codes=new ArrayList<String>();String after="";
             while(true) {var page=scope.fundCodes(after);if(page.isEmpty()) break;codes.addAll(page);after=page.get(page.size()-1);}
@@ -66,9 +68,11 @@ public class AutoModelService {
         dispatch();
     }
     public void dispatch() {
+        if(comprehensiveOnly()) return;
         if(!running.compareAndSet(false,true)) return;
         worker.execute(()->{try {runReplay();} finally {running.set(false);}});
     }
+    private static boolean comprehensiveOnly() { return true; }
     /** 一次仅领取一个周期，逐基金保存回执；崩溃后沿用冻结输入和首次结果。 */
     void runReplay() {
         try {

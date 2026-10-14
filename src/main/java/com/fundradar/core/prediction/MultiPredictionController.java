@@ -15,6 +15,12 @@ public class MultiPredictionController {
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","no-store, private"); }
     @GetMapping("/watchlist/{code}/predictions") public ApiResponse<?> current(@PathVariable String code) { return ok(service.current(code)); }
     @GetMapping("/watchlist/{code}/predictions/history") public ApiResponse<?> history(@PathVariable String code,@RequestParam(required=false) String before,@RequestParam(required=false) UUID beforeId) { return ok(service.history(code,before,beforeId)); }
+    /** 事后回看使用独立读取入口，继续校验登录与本人当前关注范围。 */
+    @GetMapping("/watchlist/{code}/analysis-reviews")
+    public ApiResponse<?> analysisReviews(@PathVariable String code,@RequestParam(required=false) String before,
+                                         @RequestParam(required=false) UUID beforeId) {
+        return ok(service.analysisReviews(code,before,beforeId));
+    }
     /** 解释按原记录缓存，单独生成失败不影响已有预测；禁止客户端传入事实或提示词。 */
     @PostMapping("/watchlist/{code}/predictions/{id}/narrative")
     public ApiResponse<?> narrative(@PathVariable String code,@PathVariable UUID id,
