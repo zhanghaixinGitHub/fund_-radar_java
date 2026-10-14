@@ -72,6 +72,7 @@ public class InternalSyncJobService implements SyncJobService {
 
     @Override
     public SyncJobResponse startDirection1dPredictions() {
+        // Python固定生成002112/T1。Java保持管理员鉴权和原任务编号，不追加多周期请求。
         return toResponse(aiSyncJobClient.startDirection1dPredictions());
     }
 

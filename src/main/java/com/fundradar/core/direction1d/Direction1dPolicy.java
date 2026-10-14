@@ -23,10 +23,17 @@ public final class Direction1dPolicy {
     public static Instant instant(JsonNode n,String key) { return OffsetDateTime.parse(n.path(key).asText()).toInstant(); }
     public static JsonNode validate(ObjectMapper json,String raw,String hash,String expectedCode,Instant now) {
         try {
-            if(raw.length()>150_000 || !hash(raw).equals(hash)) throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
+            // 先给未解析正文设硬上限，再验证哈希。综合结果有完整原文依据，单独使用1 MiB契约。
+            // 原统计预测仍保留15万字符限制，不能仅因综合结果放宽而改变其他协议的接收边界。
+            if(raw.length()>Direction1dAnalysisPolicy.MAX_RESULT_BYTES || !hash(raw).equals(hash))
+                throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
             JsonNode p=json.readTree(raw);
-            if(Direction1dAnalysisPolicy.PROTOCOL.equals(p.path("protocol").asText()))
+            if(Direction1dAnalysisPolicy.PROTOCOL.equals(p.path("protocol").asText())) {
+                if(raw.getBytes(StandardCharsets.UTF_8).length>Direction1dAnalysisPolicy.MAX_RESULT_BYTES)
+                    throw new IllegalArgumentException("ANALYSIS_RESULT_LIMIT");
                 return Direction1dAnalysisPolicy.validate(p,expectedCode,now);
+            }
+            if(raw.length()>150_000) throw new IllegalArgumentException("CONTENT_HASH_MISMATCH");
             if(p.has("revision_sequence") || p.has("input_identity")) {
                 if(!p.path("revision_sequence").isIntegralNumber() || !p.path("revision_sequence").canConvertToLong()
                         || p.path("revision_sequence").asLong()<=0

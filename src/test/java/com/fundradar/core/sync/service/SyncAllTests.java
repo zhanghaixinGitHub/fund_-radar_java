@@ -188,8 +188,11 @@ class SyncAllTests {
         assertTrue(calls.isEmpty());
         login(PermissionCode.SYNC_JOB_START,PermissionCode.SYNC_JOB_READ);
         upstreamBody=upstreamBody.replace("MARKET_ALL","DIRECTION_1D_PREDICTIONS");
+        upstreamBody=upstreamBody.replace("\"fund_codes\":[]", "\"fund_codes\":[\"002112\"]");
         mvc.perform(post(path)).andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.data.jobType").value("DIRECTION_1D_PREDICTIONS"));
+                .andExpect(jsonPath("$.data.jobType").value("DIRECTION_1D_PREDICTIONS"))
+                .andExpect(jsonPath("$.data.fundCodes.length()").value(1))
+                .andExpect(jsonPath("$.data.fundCodes[0]").value("002112"));
         mvc.perform(get(path+"/latest")).andExpect(status().isOk());
         assertEquals(List.of("POST /internal/v1/funds/sync-jobs/direction-1d-predictions",
                 "GET /internal/v1/funds/sync-jobs/direction-1d-predictions/latest"),calls);

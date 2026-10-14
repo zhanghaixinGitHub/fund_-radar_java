@@ -89,6 +89,66 @@ class Direction1dAnalysisTests {
     @Test void allOriginalSourcesAndLongQuoteBundleAreAccepted() throws Exception {
         assertDoesNotThrow(()->validate(bundlePayload()));
     }
+    /** 完整依据超过旧15万字符仍可留档，末尾否定和审批条件必须逐字保留。 */
+    @Test void fullAnalysisAboveOldCharacterLimitKeepsOriginalEvidence() throws Exception {
+        var p=bundlePayload();var fact=(ObjectNode)p.path("evidence").path("holdings");
+        fact.put("text","原文条件。".repeat(15000)+"尚未完成，仍需审批。");
+        ((ObjectNode)p.path("narrative").path("drivers").get(0)).set("observation",fact.get("text"));
+        String raw=p.toString();assertTrue(raw.length()>150_000);
+        assertTrue(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<Direction1dAnalysisPolicy.MAX_RESULT_BYTES);
+        assertDoesNotThrow(()->validate(p));assertEquals(raw,p.toString());
+    }
+    /** 限制按UTF-8字节计算，中文正文未到一百万字符也可能超出1 MiB，仍应拒绝。 */
+    @Test void analysisAboveByteBudgetIsRejectedWithoutTruncatingEvidence() throws Exception {
+        var p=bundlePayload();var fact=(ObjectNode)p.path("evidence").path("holdings");
+        fact.put("text","原文条件。".repeat(40000)+"尚未完成，仍需审批。");
+        ((ObjectNode)p.path("narrative").path("drivers").get(0)).set("observation",fact.get("text"));
+        String raw=p.toString();assertTrue(raw.length()<Direction1dAnalysisPolicy.MAX_RESULT_BYTES);
+        assertTrue(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>Direction1dAnalysisPolicy.MAX_RESULT_BYTES);
+        var error=assertThrows(IllegalArgumentException.class,()->validate(p));
+        assertEquals("ANALYSIS_RESULT_LIMIT",error.getMessage());assertEquals(raw,p.toString());
+    }
+    /** 新上限只用于综合协议；其他预测继续遵守原15万字符限制，哈希核对也不能绕过。 */
+    @Test void ordinaryPredictionAndHashChecksKeepExistingBounds() throws Exception {
+        var p=bundlePayload();p.put("protocol",Direction1dPolicy.ACTIVE_PROTOCOL);
+        p.put("padding","x".repeat(150001));
+        var error=assertThrows(IllegalArgumentException.class,()->validate(p));
+        assertEquals("CONTENT_HASH_MISMATCH",error.getMessage());
+        String raw=bundlePayload().toString();
+        assertThrows(IllegalArgumentException.class,()->Direction1dPolicy.validate(json,raw,"a".repeat(64),"002112",now));
+    }
+    /** 超出旧篇幅与条数目标时保留全文；多个引用来源仍与前端说明逐个一致。 */
+    @Test void organizedLongTextAndAdditionalReasonsKeepAllConditions() throws Exception {
+        var p=payload();var a=(ObjectNode)p.path("analysis");var n=(ObjectNode)p.path("narrative");
+        a.put("summary","综合说明。".repeat(80)+"尚未确认。");
+        a.put("synthesis","观察条件。".repeat(150)+"仍需审批。");
+        n.set("summary",a.get("summary"));n.set("context",a.get("synthesis"));
+        for(int i=1;i<4;i++)a.withArray("change_conditions").add("转强条件"+i+"仍需观察。".repeat(80));
+        for(int i=1;i<6;i++)a.withArray("limitations").add("风险说明"+i+"尚未确认。".repeat(80));
+        var reason=(ObjectNode)a.path("reasons").get(0);var driver=(ObjectNode)n.path("drivers").get(0);
+        reason.put("title","事项标题".repeat(40));reason.put("meaning","事项含义。".repeat(80));
+        reason.put("implication","可能影响。".repeat(80)+"尚未完成，仍需审批。");
+        var observations=new java.util.ArrayList<String>();observations.add(driver.path("observation").asText());
+        for(int i=0;i<7;i++) {
+            String id="notice:"+i;var fact=((ObjectNode)p.path("evidence")).putObject(id);
+            fact.put("category","公告");fact.put("text","公告原文。".repeat(80)+"尚未完成。");
+            var source=fact.putObject("source");source.put("title","公告标题".repeat(80));
+            source.put("url","https://example.com/notice/"+i);source.put("publishedDate","2026-10-09");
+            reason.withArray("refs").add(id);observations.add(fact.path("text").asText());
+            driver.withArray("sources").add(source.deepCopy());
+        }
+        for(String field:new String[]{"title","meaning","implication"})driver.set(field,reason.get(field));
+        driver.put("observation",String.join("\n",observations));
+        for(int i=1;i<8;i++) {a.withArray("reasons").add(reason.deepCopy());n.withArray("drivers").add(driver.deepCopy());}
+        for(int i=0;i<5;i++) {
+            var opposite=reason.deepCopy();opposite.put("role","支持上涨");a.withArray("counterpoints").add(opposite);
+            var counterpart=driver.deepCopy();counterpart.put("assessment","支持上涨");n.withArray("counterpoints").add(counterpart);
+        }
+        String original=p.toString();assertDoesNotThrow(()->validate(p));assertEquals(original,p.toString());
+        assertEquals(8,a.path("reasons").size());assertEquals(8,reason.path("refs").size());
+        assertEquals(5,a.path("counterpoints").size());assertEquals(6,a.path("limitations").size());
+        assertTrue(reason.path("implication").asText().endsWith("尚未完成，仍需审批。"));
+    }
     @Test void omittedOrChangedSecondarySourceIsRejected() throws Exception {
         var p=bundlePayload();((com.fasterxml.jackson.databind.node.ArrayNode)p.path("narrative").path("drivers").get(0).path("sources")).remove(1);
         assertThrows(IllegalArgumentException.class,()->validate(p));

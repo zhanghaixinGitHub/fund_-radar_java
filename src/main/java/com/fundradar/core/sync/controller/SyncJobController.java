@@ -89,7 +89,7 @@ public class SyncJobController {
         return ApiResponse.success(syncJobService.getLatestFundNews());
     }
 
-    /** 一键创建全部任务；费率写入仍要求原费率维护权限，不能借批次绕过。 */
+    /** 一键更新资料，预测阶段仅执行002112的一日判断；费率维护权限仍独立校验。 */
     @PostMapping("/all")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startAll() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);
@@ -98,7 +98,7 @@ public class SyncJobController {
                 .body(ApiResponse.success(syncJobService.startAll()));
     }
 
-    /** 管理员手动检查全部有效关注基金；无需系统或个人实验开关。 */
+    /** 手动生成002112的一日预测，与一键同步使用相同固定范围；不接受客户端扩大范围。 */
     @PostMapping("/direction-1d-predictions")
     public ResponseEntity<ApiResponse<SyncJobResponse>> startDirection1dPredictions() {
         CurrentUserContext.requirePermission(PermissionCode.SYNC_JOB_START);

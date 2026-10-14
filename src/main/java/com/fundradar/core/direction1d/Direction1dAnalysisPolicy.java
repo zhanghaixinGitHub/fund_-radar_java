@@ -11,12 +11,16 @@ import java.util.*;
 /** 综合分析单独验收，不伪装为已训练的两个统计分支；原协议校验保持原样。 */
 public final class Direction1dAnalysisPolicy {
     public static final String PROTOCOL="DIRECTION_1D_ANALYSIS_V1";
+    /** 与Python统一的完整综合结果上限，单位为UTF-8字节；包含原文依据和来源清单。 */
+    public static final int MAX_RESULT_BYTES=1_048_576;
     private Direction1dAnalysisPolicy() {}
     private static void require(boolean condition,String reason) {
         if(!condition) throw new IllegalArgumentException(reason);
     }
     private static Instant at(JsonNode node,String name) { return Direction1dPolicy.instant(node,name); }
     private static boolean text(JsonNode node,int max) { return node.isTextual()&&!node.asText().isBlank()&&node.asText().length()<=max; }
+    /** 模型说明的单段字数仅作整理目标；Python保留全文，Java不因超过旧篇幅判整包失败。 */
+    private static boolean analysisText(JsonNode node) { return node.isTextual()&&!node.asText().isBlank(); }
     public static JsonNode validate(JsonNode p,String code,Instant now) {
         require("002112".equals(code)&&code.equals(p.path("fund_code").asText())
             &&PROTOCOL.equals(p.path("schema_version").asText())&&p.path("horizon_trading_days").asInt()==1
@@ -55,14 +59,15 @@ public final class Direction1dAnalysisPolicy {
         require(values.isEmpty()?p.path("latest_nav_date").isNull():previous.toString().equals(p.path("latest_nav_date").asText()),"ANALYSIS_NAV_DATE_INVALID");
         JsonNode a=p.path("analysis"),facts=p.path("evidence");
         require(Set.of("UP","DOWN").contains(a.path("direction").asText())&&"LOW".equals(a.path("confidence").asText())
-            &&text(a.path("summary"),250)&&text(a.path("synthesis"),600)&&facts.isObject()&&!facts.isEmpty(),"ANALYSIS_RESULT_INVALID");
+            &&analysisText(a.path("summary"))&&analysisText(a.path("synthesis"))&&facts.isObject()&&!facts.isEmpty(),"ANALYSIS_RESULT_INVALID");
         boolean supports=false;
         for(String kind:List.of("reasons","counterpoints")) {
             JsonNode rows=a.path(kind);
-            require(rows.isArray()&&rows.size()<=(kind.equals("reasons")?6:4)&&(!kind.equals("reasons")||!rows.isEmpty()),"ANALYSIS_REASONS_INVALID");
+            // 六条理由、四条反证是模型组织目标，超出后保留真实内容，来源及方向仍严格核对。
+            require(rows.isArray()&&(!kind.equals("reasons")||!rows.isEmpty()),"ANALYSIS_REASONS_INVALID");
             for(JsonNode r:rows) {
-                require(text(r.path("title"),120)&&text(r.path("meaning"),250)&&text(r.path("implication"),250)
-                    &&r.path("refs").isArray()&&!r.path("refs").isEmpty()&&r.path("refs").size()<=5
+                require(analysisText(r.path("title"))&&analysisText(r.path("meaning"))&&analysisText(r.path("implication"))
+                    &&r.path("refs").isArray()&&!r.path("refs").isEmpty()
                     &&Set.of("支持上涨","支持下跌","双向影响","背景观察").contains(r.path("role").asText()),"ANALYSIS_REASON_INVALID");
                 Set<String> seen=new HashSet<>();
                 for(JsonNode ref:r.path("refs")) require(ref.isTextual()&&facts.has(ref.asText())&&seen.add(ref.asText()),"ANALYSIS_REFERENCE_INVALID");
@@ -72,17 +77,15 @@ public final class Direction1dAnalysisPolicy {
         require(supports,"ANALYSIS_DIRECTION_UNEXPLAINED");
         for(String field:List.of("limitations","change_conditions")) {
             JsonNode entries=a.path(field);
-            require(entries.isArray()&&entries.size()<=(field.equals("limitations")?5:3)
-                &&(!field.equals("limitations")||!entries.isEmpty()),"ANALYSIS_TEXT_INVALID");
-            for(JsonNode entry:entries) require(text(entry,250),"ANALYSIS_TEXT_INVALID");
+            require(entries.isArray()&&(!field.equals("limitations")||!entries.isEmpty()),"ANALYSIS_TEXT_INVALID");
+            for(JsonNode entry:entries) require(analysisText(entry),"ANALYSIS_TEXT_INVALID");
         }
         for(JsonNode fact:facts) {
-            // 同一公司多个事项原文合为一份依据，不能截断引文；整包仍受入口 150000 字符限制。
-            boolean bundle=text(fact.path("event_group"),100)&&fact.path("sources").isArray();
-            require(text(fact.path("text"),bundle?150000:2500),"ANALYSIS_FACT_INVALID");
+            // 同源原文与经理背景保留全文；整包受入口1 MiB字节限制，不截掉末尾条件来凑篇幅。
+            require(analysisText(fact.path("text")),"ANALYSIS_FACT_INVALID");
             for(JsonNode source:factSources(fact)) {
                 URI uri=URI.create(source.path("url").asText());
-                require(text(source.path("title"),220)&&text(source.path("url"),1500)
+                require(analysisText(source.path("title"))&&text(source.path("url"),1500)
                     &&Set.of("http","https").contains(uri.getScheme())&&uri.getHost()!=null&&uri.getUserInfo()==null
                     &&!LocalDate.parse(source.path("publishedDate").asText()).isAfter(asOf.atZone(Direction1dPolicy.ZONE).toLocalDate()),"ANALYSIS_SOURCE_INVALID");
             }
