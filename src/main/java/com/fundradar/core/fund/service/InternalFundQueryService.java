@@ -6,6 +6,7 @@ import com.fundradar.core.fund.api.FundManagerResponse;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundNavPointResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
+import com.fundradar.core.fund.api.FundRatingResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonItemResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
 import com.fundradar.core.fund.api.FundShareHistoryResponse;
@@ -27,6 +28,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * FundQueryService 的 M0 实现。
@@ -47,15 +50,15 @@ public class InternalFundQueryService implements FundQueryService {
     }
 
     @Override
-    /** 查询基金分页；无缓存的 AI 服务异常会继续抛出，不能伪造列表结果。 */
+    /** 查询基金分页并附上当前评级；只缓存基础资料，评级故障不影响列表返回。 */
     public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page) {
+        FundPageResponse response;
         try {
             AiFundPage responsePage = aiFundClient.listFunds(keyword, fundType, pageSize, cursor, page);
-            FundPageResponse response = toPageResponse(responsePage);
+            response = toPageResponse(responsePage);
             fundReadCache.savePage(keyword, fundType, pageSize, cursor, page, response);
-            return response;
         } catch (AiServiceUnavailableException exception) {
-            return fundReadCache.findPage(keyword, fundType, pageSize, cursor, page)
+            response = fundReadCache.findPage(keyword, fundType, pageSize, cursor, page)
                     .map(cached -> {
                         LOGGER.warn("InternalFundQueryService.listFunds   >>> serving stale fund page from cache");
                         return new FundPageResponse(
@@ -71,6 +74,36 @@ public class InternalFundQueryService implements FundQueryService {
                     })
                     .orElseThrow(() -> exception);
         }
+        return withCurrentRatings(response);
+    }
+
+    /**
+     * 每页最多 100 只基金，共用一次已发布评级查询，再按基金代码匹配，保持原列表顺序与分页。
+     * 基础资料从缓存降级时也重新读取评级，避免已撤回或过期的缓存等级继续展示。
+     * 查询仅核验已有结果，不触发计算；失败及缺项返回 null，由前端区分为“评级暂不可用”。
+     */
+    private FundPageResponse withCurrentRatings(FundPageResponse page) {
+        if (page.items().isEmpty()) return page;
+        Map<String, FundRatingResponse.Summary> ratings = Map.of();
+        try {
+            String codes = page.items().stream().map(FundSummaryResponse::fundCode)
+                    .distinct().collect(Collectors.joining(","));
+            ratings = aiFundClient.getFundRatings(codes).items().stream()
+                    .collect(Collectors.toMap(FundRatingResponse.Summary::fundCode, item -> item, (first, ignored) -> first));
+        } catch (AiServiceUnavailableException exception) {
+            LOGGER.warn("InternalFundQueryService.withCurrentRatings   >>> ratings unavailable, fundCount={}",
+                    page.items().size(), exception);
+        }
+        Map<String, FundRatingResponse.Summary> currentRatings = ratings;
+        return new FundPageResponse(
+                page.items().stream().map(item -> new FundSummaryResponse(
+                        item.fundCode(), item.fundName(), item.fundType(), item.status(), item.asOfDate(),
+                        item.dayChangeRate(), item.weekChangeRate(), item.monthChangeRate(), item.isWatched(),
+                        currentRatings.get(item.fundCode())
+                )).toList(),
+                page.nextCursor(), page.page(), page.pageSize(), page.totalCount(), page.totalPages(),
+                page.stale(), page.cachedAt()
+        );
     }
 
     @Override
@@ -280,7 +313,8 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.dayChangeRate(),
                 fund.weekChangeRate(),
                 fund.monthChangeRate(),
-                false
+                false,
+                null
         );
     }
 }

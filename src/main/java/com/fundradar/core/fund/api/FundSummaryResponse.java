@@ -13,6 +13,8 @@ public record FundSummaryResponse(
         BigDecimal dayChangeRate,
         BigDecimal weekChangeRate,
         BigDecimal monthChangeRate,
-        boolean isWatched
+        boolean isWatched,
+        /** 随本页批量读取的已发布评级；读取失败或缺少对应结果时为 null，不代表暂无评分。 */
+        FundRatingResponse.Summary rating
 ) {
 }

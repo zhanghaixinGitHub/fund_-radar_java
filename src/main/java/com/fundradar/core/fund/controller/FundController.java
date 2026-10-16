@@ -22,6 +22,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -86,7 +88,7 @@ public class FundController {
      *                 MONEY（货币型）、QDII、FOF（基金中基金）、OTHER（其他类型）；空字符串不合法。
      */
     @GetMapping
-    public ApiResponse<FundPageResponse> listFunds(
+    public ResponseEntity<ApiResponse<FundPageResponse>> listFunds(
             @RequestParam(required = false) @Size(max = 50) String keyword,
             @RequestParam(defaultValue = "10") @Min(1) @Max(100) int pageSize,
             @RequestParam(required = false) String cursor,
@@ -101,9 +103,10 @@ public class FundController {
         if (page != null && normalizedCursor != null) {
             throw new IllegalArgumentException("page 与 cursor 不能同时使用。");
         }
-        return ApiResponse.success(withWatchStatus(
+        // 列表包含当前评级与本人关注状态，禁止浏览器或中间缓存继续复用撤回前的结果。
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(ApiResponse.success(withWatchStatus(
                 fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
-        ));
+        )));
     }
 
     /**
@@ -200,7 +203,7 @@ public class FundController {
                 .map(item -> new FundSummaryResponse(
                         item.fundCode(), item.fundName(), item.fundType(), item.status(), item.asOfDate(),
                         item.dayChangeRate(), item.weekChangeRate(), item.monthChangeRate(),
-                        watchedCodes.contains(item.fundCode())
+                        watchedCodes.contains(item.fundCode()), item.rating()
                 ))
                 .toList();
         return new FundPageResponse(

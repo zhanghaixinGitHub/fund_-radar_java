@@ -20,6 +20,13 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/v1/funds")
 public class FundMaterialsController {
+    /**
+     * 公开资料中的沪深北代码为六位加市场，港股为五位加HK。
+     * 无法从原报告确认市场的历史证券只保留原六位代码，不推定其为A股；
+     * 本格式校验之后，资料服务仍会校验公司是否属于所查基金，原有身份和读权限不变。
+     */
+    private static final String MATERIAL_STOCK_CODE_PATTERN =
+            "^(?:[0-9]{6}(?:\\.(?:SH|SZ|BJ))?|[0-9]{5}\\.HK)$";
     private final FundMaterialsQueryService materials;
     private final FundQueryService funds;
     private final WatchlistService watchlist;
@@ -61,7 +68,7 @@ public class FundMaterialsController {
     public ApiResponse<FundMaterialsResponse> overview(
             @PathVariable @Pattern(regexp = "^[0-9]{6}$") String fundCode,
             @RequestParam(required = false) @Pattern(regexp = "^[a-f0-9]{64}$") String reportId,
-            @RequestParam(required = false) @Pattern(regexp = "^[0-9]{6}\\.(SH|SZ|BJ)$") String stockCode) {
+            @RequestParam(required = false) @Pattern(regexp = MATERIAL_STOCK_CODE_PATTERN) String stockCode) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         return ApiResponse.success(materials.overview(fundCode, reportId, stockCode));
     }
@@ -96,7 +103,7 @@ public class FundMaterialsController {
             @RequestParam(defaultValue = "1") @Min(1) @Max(10000) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int pageSize,
             @RequestParam(defaultValue = "all") @Pattern(regexp = "all|fund|company|news") String kind,
-            @RequestParam(required = false) @Pattern(regexp = "^[0-9]{6}\\.(SH|SZ|BJ)$") String stockCode,
+            @RequestParam(required = false) @Pattern(regexp = MATERIAL_STOCK_CODE_PATTERN) String stockCode,
             @RequestParam(defaultValue = "") @Size(max = 80) String keyword,
             @RequestParam(defaultValue = "false") boolean latestOnly) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);

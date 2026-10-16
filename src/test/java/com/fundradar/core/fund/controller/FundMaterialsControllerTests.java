@@ -62,6 +62,26 @@ class FundMaterialsControllerTests {
                 LocalDate.of(2026, 9, 24), LocalDate.of(2026, 9, 23)));
         verifyNoInteractions(funds);
     }
+    @Test void publicMaterialsSupportHongKongAndUnresolvedHistoricalSecurities() throws Exception {
+        var overview = FundMaterialsController.class.getMethod("overview", String.class, String.class, String.class);
+        var documents = FundMaterialsController.class.getMethod("documents", String.class, int.class, int.class,
+                String.class, String.class, String.class, boolean.class);
+        try (var factory = Validation.buildDefaultValidatorFactory()) {
+            var validator = factory.getValidator().forExecutables();
+            for (String code : java.util.List.of("300308.SZ", "688256.SH", "920982.BJ", "00981.HK", "400174")) {
+                assertTrue(validator.validateParameters(controller, overview,
+                        new Object[]{"012835", "a".repeat(64), code}).isEmpty(), code);
+                assertTrue(validator.validateParameters(controller, documents,
+                        new Object[]{"012835", 1, 20, "company", code, "", false}).isEmpty(), code);
+            }
+            for (String code : java.util.List.of("../private", "00981.SH", "000981.HK", "981.HK", "400174.UNVERIFIED")) {
+                assertFalse(validator.validateParameters(controller, overview,
+                        new Object[]{"012835", "a".repeat(64), code}).isEmpty(), code);
+                assertFalse(validator.validateParameters(controller, documents,
+                        new Object[]{"012835", 1, 20, "company", code, "", false}).isEmpty(), code);
+            }
+        }
+    }
     @Test void evaluationBatchHasStrictBoundedCodes() throws Exception {
         var method=FundMaterialsController.class.getMethod("evaluations",String.class);
         try(var factory=Validation.buildDefaultValidatorFactory()) {
