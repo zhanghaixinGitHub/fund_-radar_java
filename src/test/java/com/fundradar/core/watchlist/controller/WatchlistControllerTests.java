@@ -192,6 +192,12 @@ class WatchlistControllerTests {
         }
 
         @Override
+        public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor,
+                                          Integer page, String rating) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public FundDetailResponse getFund(String fundCode) {
             throw new UnsupportedOperationException();
         }

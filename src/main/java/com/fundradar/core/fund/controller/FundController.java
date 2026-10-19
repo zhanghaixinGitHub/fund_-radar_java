@@ -96,7 +96,11 @@ public class FundController {
             @RequestParam(required = false) @jakarta.validation.constraints.Pattern(
                     regexp = "^(BOND|STOCK|MIXED|INDEX|MONEY|QDII|FOF|OTHER)$",
                     message = "基金类型筛选参数无效。"
-            ) String fundType
+            ) String fundType,
+            @RequestParam(required = false) @jakarta.validation.constraints.Pattern(
+                    regexp = "^(EXCELLENT|GOOD|AVERAGE|WEAK|UNRATED|PENDING)$",
+                    message = "基金评级筛选参数无效。"
+            ) String rating
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         String normalizedCursor = cursor == null || cursor.isBlank() ? null : cursor;
@@ -105,7 +109,8 @@ public class FundController {
         }
         // 列表包含当前评级与本人关注状态，禁止浏览器或中间缓存继续复用撤回前的结果。
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(ApiResponse.success(withWatchStatus(
-                fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
+                rating == null ? fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
+                        : fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page, rating)
         )));
     }
 

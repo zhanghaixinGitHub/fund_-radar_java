@@ -20,6 +20,21 @@ class Direction1dBatchTests {
     final Direction1dBatchService batch=new Direction1dBatchService(repo,service,client);
     final LocalDate target=LocalDate.of(2026,9,23);
     @AfterEach void clear(){CurrentUserContext.clear();}
+
+    @Test void personalBatchOnlyGeneratesForAuthenticatedOwner() throws Exception {
+        UUID owner=UUID.randomUUID(),scope=UUID.randomUUID();
+        when(repo.predictionEligible(owner,"008888")).thenReturn(true);
+        when(service.checkedStatus()).thenReturn(json.readTree("{\"window\":{\"target_nav_date\":\"2026-09-23\"}}"));
+        when(client.coverage(List.of("008888"))).thenReturn(json.readTree("{\"items\":[{\"fund_code\":\"008888\"}]}"));
+        when(repo.scope(eq(owner),eq(target),any())).thenReturn(scope);
+        when(service.process(eq(owner),eq(scope),any(),any(),eq(Duration.ofSeconds(30))))
+                .thenReturn(Map.of("status","PREDICTED","reused",false));
+        assertEquals("PREDICTED",batch.generateForUser("008888",target,owner).get("status"));
+        verify(repo,never()).predictionUsers(any(),any());
+        when(repo.predictionEligible(owner,"008888")).thenReturn(false);
+        assertEquals("NO_LONGER_FOLLOWED",batch.generateForUser("008888",target,owner).get("status"));
+        verify(service,times(1)).process(eq(owner),eq(scope),any(),any(),any());
+    }
     @Test void newInputFailureDoesNotClaimOldForecastIsAnUpdate() throws Exception {
         var actual=new Direction1dService(repo,client);UUID user=UUID.randomUUID(),scopeId=UUID.randomUUID();
         var w=json.readTree("{\"target_nav_date\":\"2026-09-23\",\"status\":\"OPEN\"}");

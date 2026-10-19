@@ -53,6 +53,32 @@ class Direction1dDatabaseTests {
                 .param("u",id).param("m","139"+String.format("%08d",ThreadLocalRandom.current().nextInt(100000000))).update();return id;
     }
     @AfterEach void clear(){CurrentUserContext.clear();}
+
+    @Test void personalSyncQueriesAndJobCompletionKeepOwnerBoundary() {
+        LocalDate target=LocalDate.of(2026,9,14);
+        assertEquals(List.of("123456"),repo.predictionFundCodes("",user));
+        assertTrue(repo.predictionFundCodes("",other).isEmpty());
+        assertTrue(repo.predictionEligible(user,"123456"));
+        assertFalse(repo.predictionEligible(other,"123456"));
+        UUID job=UUID.randomUUID();
+        UUID first=repo.scope(user,target,List.of()),second=repo.scope(other,target,List.of());
+        db.sql("INSERT INTO watchlist_item(watchlist_item_id,user_id,fund_code,fund_type) VALUES(:id,:u,'123456','STOCK')")
+                .param("id",UUID.randomUUID()).param("u",other).update();
+        repo.attempt(first,"123456",target,job,"RUNNING",List.of());
+        repo.attempt(second,"123456",target,job,"RUNNING",List.of());
+        var scopes=repo.syncJobScopes("123456",target,job,null,user);
+        assertEquals(1,scopes.size());assertEquals(user,scopes.get(0).get("user_id"));
+        repo.finishSyncJob("123456",target,job,"FAILED","TEST_ONLY",user);
+        assertEquals("RUNNING",db.sql("SELECT status FROM direction_1d_attempt WHERE scope_snapshot_id=:s")
+                .param("s",second).query(String.class).single());
+        assertEquals("FAILED",db.sql("SELECT status FROM direction_1d_attempt WHERE scope_snapshot_id=:s ORDER BY attempted_at DESC LIMIT 1")
+                .param("s",first).query(String.class).single());
+        assertEquals(2,db.sql("SELECT count(*) FROM direction_1d_attempt WHERE scope_snapshot_id=:s")
+                .param("s",first).query(Integer.class).single());
+        repo.finishSyncJob("123456",target,job,"FAILED","TEST_ONLY",user);
+        assertEquals(2,db.sql("SELECT count(*) FROM direction_1d_attempt WHERE scope_snapshot_id=:s")
+                .param("s",first).query(Integer.class).single());
+    }
     @Test void ownerIsolationPaginationAndPendingNotWrong() {
         assertEquals(1L,repo.history(user,null,LocalDate.of(2021,1,1),LocalDate.of(2026,12,31),1,20).get("totalCount"));
         assertEquals(0L,repo.history(other,null,LocalDate.of(2021,1,1),LocalDate.of(2026,12,31),1,20).get("totalCount"));

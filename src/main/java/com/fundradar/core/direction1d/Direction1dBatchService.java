@@ -18,6 +18,20 @@ public class Direction1dBatchService {
 
     public List<String> fundCodes(String after) { return repo.predictionFundCodes(after); }
 
+    public List<String> fundCodes(String after,UUID owner) { return repo.predictionFundCodes(after,owner); }
+
+    /** 只为触发账号登记预测；即使同步过程中取消关注或停用，也不能继续关联结果。 */
+    public Map<String,Object> generateForUser(String code,LocalDate target,UUID owner) {
+        if(code==null || !code.matches("[0-9]{6}") || target==null || owner==null)
+            throw new IllegalArgumentException("INVALID_PREDICTION_SCOPE");
+        if(!repo.predictionEligible(owner,code)) return Map.of("status","NO_LONGER_FOLLOWED");
+        var w=service.checkedStatus().path("window");
+        if(!target.toString().equals(w.path("target_nav_date").asText())) return Map.of("status","WINDOW_CHANGED");
+        var coverage=client.coverage(List.of(code)).path("items").get(0);
+        UUID scope=repo.scope(owner,target,List.of(Map.of("fund_code",code,"coverage",Direction1dPolicy.view(coverage))));
+        return service.process(owner,scope,coverage,w,Duration.ofSeconds(30));
+    }
+
     /** 开始批次时冻结目标日；后续执行跨过下一期起点时不得悄悄更换预测日期。 */
     public Map<String,Object> window() {
         var w=service.checkedStatus().path("window");
@@ -55,9 +69,13 @@ public class Direction1dBatchService {
      * 成功必须通过原有摘要、截止时间和留档回读校验，并关联原任务内仍有效的关注账号。
      */
     public Map<String,Object> reconcile(String code,LocalDate target,UUID job) {
+        return reconcile(code,target,job,null);
+    }
+
+    public Map<String,Object> reconcile(String code,LocalDate target,UUID job,UUID owner) {
         if(code==null || !code.matches("[0-9]{6}") || target==null || job==null)
             throw new IllegalArgumentException("INVALID_PREDICTION_SCOPE");
-        var scopes=repo.syncJobScopes(code,target,job,null);
+        var scopes=owner==null?repo.syncJobScopes(code,target,job,null):repo.syncJobScopes(code,target,job,null,owner);
         if(scopes.isEmpty()) return Map.of("status","FAILED","reason","JOB_SCOPE_UNAVAILABLE");
         var result=client.get("/forecast-jobs/"+job);
         var input=result.path("payload");
@@ -68,7 +86,7 @@ public class Direction1dBatchService {
         if(Set.of("QUEUED","RUNNING").contains(state)) return Map.of("status",state,"jobId",job);
         if(!"SUCCEEDED".equals(state)) {
             String reason=result.path("result").path("reason").asText("PREDICTION_FAILED");
-            repo.finishSyncJob(code,target,job,"FAILED",reason);
+            finish(code,target,job,"FAILED",reason,owner);
             return Map.of("status","FAILED","reason",reason);
         }
         var payload=result.path("result");
@@ -80,14 +98,20 @@ public class Direction1dBatchService {
         } catch(IllegalArgumentException error) {
             // 到期后才取得的回执不能冒充截止前已保存；其他校验拒绝也保留旧判断。
             String reason="MISSED_DEADLINE".equals(error.getMessage())?"ARCHIVE_DEADLINE_PASSED":"ARCHIVE_REJECTED";
-            repo.finishSyncJob(code,target,job,"FAILED",reason);
+            finish(code,target,job,"FAILED",reason,owner);
             return Map.of("status","FAILED","reason",reason);
         }
         do {
             for(var scope:scopes) repo.link((UUID)scope.get("user_id"),saved.forecastId(),(UUID)scope.get("snapshot_id"));
-            scopes=repo.syncJobScopes(code,target,job,(UUID)scopes.get(scopes.size()-1).get("snapshot_id"));
+            UUID after=(UUID)scopes.get(scopes.size()-1).get("snapshot_id");
+            scopes=owner==null?repo.syncJobScopes(code,target,job,after):repo.syncJobScopes(code,target,job,after,owner);
         } while(!scopes.isEmpty());
-        repo.finishSyncJob(code,target,job,"PREDICTED",null);
+        finish(code,target,job,"PREDICTED",null,owner);
         return Map.of("status","PREDICTED","reused",!saved.created());
+    }
+
+    private void finish(String code,LocalDate target,UUID job,String state,String reason,UUID owner) {
+        if(owner==null) repo.finishSyncJob(code,target,job,state,reason);
+        else repo.finishSyncJob(code,target,job,state,reason,owner);
     }
 }

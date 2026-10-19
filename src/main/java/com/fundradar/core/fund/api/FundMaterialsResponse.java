@@ -11,9 +11,12 @@ public record FundMaterialsResponse(boolean available, String fundCode, String a
     public record Holding(String stockCode, String stockName, BigDecimal weightPct, BigDecimal marketValue) {}
     /** 资产配置占总资产；行业和股票持仓占基金净资产，页面必须分别注明分母。 */
     public record Allocation(String name, BigDecimal weightPct, BigDecimal value) {}
+    /** 非股票投资按原报告单独列示；债券前五名、基金投资不得混作股票或穿透后的成分股。 */
+    public record InvestmentGroup(String name, String notice, List<Holding> holdings) {}
     public record Report(String id, String title, String endDate, String publishedDate, String sourceUrl,
             boolean fullDisclosure, BigDecimal stockWeightPct, BigDecimal disclosedWeightPct,
-            List<Holding> holdings, List<Allocation> assets, List<Allocation> industries) {}
+            List<Holding> holdings, List<Allocation> assets, List<Allocation> industries,
+            List<InvestmentGroup> investmentGroups, String holdingsNotice) {}
     public record CompanyOption(String stockCode, String stockName, boolean latestHeld) {}
     public record Financial(String endDate, String publishedDate, BigDecimal revenue, BigDecimal netProfit,
             BigDecimal operatingCashflow, BigDecimal totalAssets, BigDecimal totalLiabilities,

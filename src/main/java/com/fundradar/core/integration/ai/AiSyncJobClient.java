@@ -111,11 +111,18 @@ public class AiSyncJobClient {
 
     /** 创建后台串行批次；不重试 POST，避免网络超时时重复触发外部同步。 */
     public AiSyncJobStatus startAll() {
+        return startAll(null);
+    }
+
+    /** 公共资料仍同步市场目录；个人预测仅使用本次登录用户的有效关注关系。 */
+    public AiSyncJobStatus startAll(UUID ownerUserId) {
         try {
             AiSyncJobStatus payload = restClient.post()
                     .uri("/internal/v1/funds/sync-jobs/all")
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
+                    .body(ownerUserId == null ? java.util.Map.of("materialsOnly", true)
+                            : java.util.Map.of("ownerUserId", ownerUserId.toString()))
                     .retrieve()
                     .body(AiSyncJobStatus.class);
             if (payload == null) {

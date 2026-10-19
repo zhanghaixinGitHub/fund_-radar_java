@@ -26,12 +26,23 @@ public class InternalDirection1dSyncController {
         return batch.fundCodes(after);
     }
 
+    /** 独立路径避免旧全市场调用被可选参数悄悄改变；仅服务令牌可传入认证账号。 */
+    @GetMapping("/users/{owner}/fund-codes")
+    public List<String> userFundCodes(HttpServletRequest request,@PathVariable UUID owner,
+            @RequestParam(defaultValue="") String after) {
+        authenticate(request);
+        if(!after.isEmpty() && !after.matches("[0-9]{6}")) throw new IllegalArgumentException("INVALID_CURSOR");
+        return batch.fundCodes(after,owner);
+    }
+
     @GetMapping("/window")
     public Map<String,Object> window(HttpServletRequest request) { authenticate(request); return batch.window(); }
 
     @PostMapping("/{code}")
     public Map<String,Object> generate(HttpServletRequest request,@PathVariable String code,@RequestBody Map<String,String> body) {
         authenticate(request);
+        if(body.keySet().equals(Set.of("targetNavDate","ownerUserId")))
+            return batch.generateForUser(code,LocalDate.parse(body.get("targetNavDate")),UUID.fromString(body.get("ownerUserId")));
         if(!body.keySet().equals(Set.of("targetNavDate"))) throw new IllegalArgumentException("INVALID_PREDICTION_SCOPE");
         return batch.generate(code,LocalDate.parse(body.get("targetNavDate")));
     }
@@ -41,6 +52,8 @@ public class InternalDirection1dSyncController {
     public Map<String,Object> reconcile(HttpServletRequest request,@PathVariable String code,@PathVariable UUID jobId,
             @RequestBody Map<String,String> body) {
         authenticate(request);
+        if(body.keySet().equals(Set.of("targetNavDate","ownerUserId")))
+            return batch.reconcile(code,LocalDate.parse(body.get("targetNavDate")),jobId,UUID.fromString(body.get("ownerUserId")));
         if(!body.keySet().equals(Set.of("targetNavDate"))) throw new IllegalArgumentException("INVALID_PREDICTION_SCOPE");
         return batch.reconcile(code,LocalDate.parse(body.get("targetNavDate")),jobId);
     }

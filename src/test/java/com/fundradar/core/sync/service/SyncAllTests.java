@@ -38,6 +38,7 @@ class SyncAllTests {
     private final List<String> calls = new ArrayList<>();
     private final List<String> tokens = new ArrayList<>();
     private final List<String> queries = new ArrayList<>();
+    private final List<String> requestBodies = new ArrayList<>();
     private int upstreamStatus = 200;
     private String upstreamBody = """
             {"job_id":"00000000-0000-0000-0000-000000000501","job_type":"MARKET_ALL",
@@ -56,6 +57,7 @@ class SyncAllTests {
             calls.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath());
             tokens.add(exchange.getRequestHeaders().getFirst("X-Service-Token"));
             queries.add(exchange.getRequestURI().getRawQuery());
+            requestBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = upstreamBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(upstreamStatus, body.length);
@@ -81,6 +83,18 @@ class SyncAllTests {
     private void login(PermissionCode... permissions) {
         CurrentUserContext.set(new AuthenticatedUser(UUID.randomUUID(), "test", "测试用户",
                 AccountRole.DATA_OPERATOR, Set.of(permissions)));
+    }
+
+    @Test
+    void personalBatchIgnoresBrowserSuppliedAccountAndForwardsAuthenticatedOwner() throws Exception {
+        login(PermissionCode.SYNC_JOB_START, PermissionCode.SIM_FEE_RULE_ADMIN);
+        String owner=CurrentUserContext.require().userId().toString();
+        String foreign=UUID.randomUUID().toString();
+        mvc.perform(post("/api/v1/sync-jobs/all").contentType("application/json")
+                .content("{\"ownerUserId\":\""+foreign+"\"}"))
+                .andExpect(status().isAccepted());
+        assertEquals("{\"ownerUserId\":\""+owner+"\"}",requestBodies.get(0));
+        assertFalse(requestBodies.get(0).contains(foreign));
     }
 
     @Test

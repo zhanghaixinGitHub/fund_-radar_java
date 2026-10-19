@@ -30,9 +30,9 @@ class FundListRatingsControllerTests {
     }
 
     @Test void rejectsMissingAuthenticationOrFundReadPermission() {
-        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null));
+        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD"));
         login(PermissionCode.WATCHLIST_SELF_READ);
-        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null));
+        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD"));
         verifyNoInteractions(service, watchlist);
     }
 
@@ -45,11 +45,21 @@ class FundListRatingsControllerTests {
                         null, null, null, false, rating)), null, 1, 10, 1, 1, false, null));
         when(watchlist.findCurrentUserFollowedFundCodes(List.of("002112"))).thenReturn(Set.of("002112"));
 
-        var result = controller.listFunds(null, 10, null, 1, null);
+        var result = controller.listFunds(null, 10, null, 1, null, null);
 
         assertEquals("no-store", result.getHeaders().getCacheControl());
         assertNotNull(result.getBody());
         assertTrue(result.getBody().data().items().get(0).isWatched());
         assertSame(rating, result.getBody().data().items().get(0).rating());
+    }
+
+    @Test void forwardsCombinedRatingAndKeywordFilters() {
+        login(PermissionCode.FUND_READ);
+        when(service.listFunds("华夏", "MIXED", 20, null, 1, "GOOD"))
+                .thenReturn(new FundPageResponse(List.of(), null, 1, 20, 0, 0, false, null));
+        var result = controller.listFunds("华夏", 20, null, 1, "MIXED", "GOOD");
+        assertEquals(0, result.getBody().data().totalCount());
+        verify(service).listFunds("华夏", "MIXED", 20, null, 1, "GOOD");
+        verifyNoMoreInteractions(service);
     }
 }

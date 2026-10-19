@@ -124,9 +124,14 @@ public class AiFundClient {
      * Python 返回 404 以外的调用失败统一转换为 AiServiceUnavailableException；空响应也视为不可用。
      */
     public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page) {
+        return listFunds(keyword, fundType, pageSize, cursor, page, null);
+    }
+
+    /** 评级由 Python 核验并在分页前筛选；只透传白名单参数，不在 Java 重新评分。 */
+    public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page, String rating) {
         try {
             AiFundPage payload = restClient.get()
-                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page))
+                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page, rating))
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()
@@ -306,7 +311,7 @@ public class AiFundClient {
 
     /** 根据可选关键字、游标或页码构造基金列表内部接口地址。 */
     private URI buildFundListUri(
-            UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page
+            UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page, String rating
     ) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
         if (StringUtils.hasText(keyword)) {
@@ -320,6 +325,9 @@ public class AiFundClient {
         }
         if (page != null) {
             uriBuilder.queryParam("page", page);
+        }
+        if (StringUtils.hasText(rating)) {
+            uriBuilder.queryParam("rating", rating);
         }
         return uriBuilder.build();
     }

@@ -64,7 +64,9 @@ public class InternalSyncJobService implements SyncJobService {
 
     @Override
     public SyncJobResponse startAll() {
-        SyncJobResponse response = toResponse(aiSyncJobClient.startAll());
+        // 账号由服务端认证上下文冻结，异步线程不能读浏览器提交的用户编号。
+        SyncJobResponse response = toResponse(aiSyncJobClient.startAll(
+                com.fundradar.core.auth.CurrentUserContext.require().userId()));
         LOGGER.info("InternalSyncJobService.startAll   >>> sync batch started, jobId={}, status={}",
                 response.jobId(), response.status());
         return response;

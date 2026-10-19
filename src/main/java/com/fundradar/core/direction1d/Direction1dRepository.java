@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.Timestamp;
 import java.time.*;
@@ -44,6 +45,19 @@ public class Direction1dRepository {
         return db.sql("SELECT DISTINCT w.fund_code FROM watchlist_item w JOIN user_account u USING(user_id) WHERE "
                 + ELIGIBLE_USER + " AND w.fund_code>:after ORDER BY w.fund_code LIMIT 100")
                 .param("after",after).query(String.class).list();
+    }
+
+    /** 一键同步的关注范围限定为触发账号，同时重新检查账号状态及必要权限。 */
+    public List<String> predictionFundCodes(String after,UUID owner) {
+        return db.sql("SELECT w.fund_code FROM watchlist_item w JOIN user_account u USING(user_id) WHERE "
+                + ELIGIBLE_USER + " AND u.user_id=:owner AND w.fund_code>:after ORDER BY w.fund_code LIMIT 100")
+                .param("owner",owner).param("after",after).query(String.class).list();
+    }
+
+    public boolean predictionEligible(UUID owner,String code) {
+        return db.sql("SELECT EXISTS(SELECT 1 FROM user_account u JOIN watchlist_item w USING(user_id) WHERE "
+                + ELIGIBLE_USER + " AND u.user_id=:owner AND w.fund_code=:code)")
+                .param("owner",owner).param("code",code).query(Boolean.class).single();
     }
 
     /** 每只基金生成一次公共预测，再分页关联到实际关注它的有效账号。 */
@@ -100,23 +114,48 @@ public class Direction1dRepository {
     }
     /** 只续接原作业已登记的账号范围，按快照分页；新增关注者不能借状态查询扩大处理范围。 */
     public List<Map<String,Object>> syncJobScopes(String code,LocalDate target,UUID job,UUID after) {
+        return syncJobScopes(code,target,job,after,null);
+    }
+
+    /** 个人批次恢复仍保留原账号边界；不能关联同一公共作业下的其他账号。 */
+    public List<Map<String,Object>> syncJobScopes(String code,LocalDate target,UUID job,UUID after,UUID owner) {
         return db.sql("""
           SELECT DISTINCT s.snapshot_id,s.user_id FROM direction_1d_attempt a
           JOIN direction_1d_scope_snapshot s ON s.snapshot_id=a.scope_snapshot_id
           JOIN user_account u ON u.user_id=s.user_id
           JOIN watchlist_item w ON w.user_id=u.user_id AND w.fund_code=a.fund_code
           WHERE a.fund_code=:code AND a.target_nav_date=:target AND s.target_nav_date=:target
-            AND a.source_job_id=:job AND (:after::uuid IS NULL OR s.snapshot_id>:after) AND
+            AND a.source_job_id=:job AND (:after::uuid IS NULL OR s.snapshot_id>:after)
+            AND (:owner::uuid IS NULL OR s.user_id=:owner) AND
           """+ELIGIBLE_USER+" ORDER BY s.snapshot_id LIMIT 50")
-                .param("code",code).param("target",target).param("job",job).param("after",after).query().listOfRows();
+                .param("code",code).param("target",target).param("job",job).param("after",after)
+                .param("owner",owner).query().listOfRows();
     }
-    /** 回填可变的执行状态，不改原预测和原尝试时间，避免旧作业的收尾遮蔽后来创建的任务。 */
+    /** 追加原任务核对回执；尝试表是不可变证据，不能UPDATE原始排队记录。 */
+    @Transactional
     public void finishSyncJob(String code,LocalDate target,UUID job,String state,String reason) {
+        finishSyncJob(code,target,job,state,reason,null);
+    }
+
+    @Transactional
+    public void finishSyncJob(String code,LocalDate target,UUID job,String state,String reason,UUID owner) {
+        // 同一公共作业的个人/市场核对共用事务锁，避免并发查询重复追加终态证据。
+        db.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))")
+                .param("key","direction1d-finish:"+job).query().singleRow();
         db.sql("""
-          UPDATE direction_1d_attempt SET status=:state,reasons=CAST(:reasons AS jsonb),next_retry_at=NULL
-          WHERE fund_code=:code AND target_nav_date=:target AND source_job_id=:job AND status IN ('QUEUED','RUNNING')
+          INSERT INTO direction_1d_attempt(attempt_id,scope_snapshot_id,fund_code,target_nav_date,source_job_id,
+            attempted_at,status,reasons,next_retry_at,trace_id)
+          SELECT gen_random_uuid(),scope_snapshot_id,fund_code,target_nav_date,source_job_id,
+            clock_timestamp(),:state,CAST(:reasons AS jsonb),NULL,trace_id
+          FROM (
+            SELECT DISTINCT ON(scope_snapshot_id) a.* FROM direction_1d_attempt a
+            WHERE fund_code=:code AND target_nav_date=:target AND source_job_id=:job
+              AND (:owner::uuid IS NULL OR scope_snapshot_id IN
+                (SELECT snapshot_id FROM direction_1d_scope_snapshot WHERE user_id=:owner))
+            ORDER BY scope_snapshot_id,attempted_at DESC,attempt_id DESC
+          ) latest WHERE status IN ('QUEUED','RUNNING')
           """).param("code",code).param("target",target).param("job",job).param("state",state)
-                .param("reasons",encode(reason==null?List.of():List.of(reason))).update();
+                .param("reasons",encode(reason==null?List.of():List.of(reason))).param("owner",owner).update();
     }
     private UUID currentPublic(String code,LocalDate target,String protocol) {
         return db.sql("SELECT forecast_id FROM direction_1d_current WHERE fund_code=:code AND target_nav_date=:target AND protocol=:protocol")

@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -128,5 +129,34 @@ class FundListRatingsTests {
 
         verify(client).listFunds(null, null, 10, null, 2);
         verifyNoMoreInteractions(client);
+    }
+
+    @Test void filteredPageReusesVerifiedRatingsWithoutSecondReadOrCache() {
+        var source = sourcePage("002112");
+        var summary = rating("002112", "RATED");
+        when(client.listFunds("测试", "MIXED", 10, null, 2, "GOOD"))
+                .thenReturn(new AiFundPage(source.items(), null, 2, 10, 11, 2, Map.of("002112", summary)));
+        var result = service.listFunds("测试", "MIXED", 10, null, 2, "GOOD");
+        assertSame(summary, result.items().get(0).rating());
+        assertEquals(11, result.totalCount());
+        assertEquals(2, result.page());
+        verify(client).listFunds("测试", "MIXED", 10, null, 2, "GOOD");
+        verifyNoMoreInteractions(client);
+        verifyNoInteractions(cache);
+    }
+
+    @Test void oldBackendCannotSilentlyIgnoreRatingFilter() {
+        when(client.listFunds(null, null, 10, null, 1, "GOOD")).thenReturn(sourcePage("002112"));
+        assertThrows(AiServiceUnavailableException.class,
+                () -> service.listFunds(null, null, 10, null, 1, "GOOD"));
+        verifyNoInteractions(cache);
+    }
+
+    @Test void filteredRatingFailureNeverFallsBackToUnfilteredCache() {
+        when(client.listFunds(null, null, 10, null, 1, "GOOD"))
+                .thenThrow(new AiServiceUnavailableException("测试故障", null));
+        assertThrows(AiServiceUnavailableException.class,
+                () -> service.listFunds(null, null, 10, null, 1, "GOOD"));
+        verifyNoInteractions(cache);
     }
 }

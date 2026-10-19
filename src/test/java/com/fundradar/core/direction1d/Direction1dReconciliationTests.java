@@ -21,6 +21,15 @@ class Direction1dReconciliationTests {
     final LocalDate target=LocalDate.of(2026,10,12);
     final UUID job=UUID.randomUUID(),scope=UUID.randomUUID(),user=UUID.randomUUID(),forecast=UUID.randomUUID();
 
+    @Test void personalReconciliationCannotAdoptAnotherAccountScope() {
+        task("RUNNING");
+        UUID other=UUID.randomUUID();
+        assertEquals("JOB_SCOPE_UNAVAILABLE",batch.reconcile("002112",target,job,other).get("reason"));
+        verify(repo).syncJobScopes("002112",target,job,null,other);
+        verify(client,never()).get(anyString());
+        verify(repo,never()).link(any(),any(),any());
+    }
+
     ObjectNode task(String state) {
         when(repo.syncJobScopes("002112",target,job,null)).thenReturn(List.of(Map.of("snapshot_id",scope,"user_id",user)));
         when(repo.syncJobScopes("002112",target,job,scope)).thenReturn(List.of());

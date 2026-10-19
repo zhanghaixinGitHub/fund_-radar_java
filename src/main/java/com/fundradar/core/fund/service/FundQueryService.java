@@ -19,6 +19,9 @@ public interface FundQueryService {
     /** 按关键字和游标查询基金分页结果，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page);
 
+    /** 按当前有效评级筛选后分页；评级核验失败时不使用旧评级缓存降级。 */
+    FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page, String rating);
+
     /** 查询单只基金详情，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundDetailResponse getFund(String fundCode);
 

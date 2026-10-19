@@ -78,6 +78,23 @@ public class InternalFundQueryService implements FundQueryService {
     }
 
     /**
+     * 评级筛选与摘要由 Python 一次返回，避免二次读取时发布批次变化导致结果不一致。
+     * 此分支不读写基础列表缓存；核验失败或旧服务忽略参数时显式失败，不能把全列表冒充筛选结果。
+     */
+    @Override
+    public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor,
+                                      Integer page, String rating) {
+        if (rating == null) return listFunds(keyword, fundType, pageSize, cursor, page);
+        AiFundPage result = aiFundClient.listFunds(keyword, fundType, pageSize, cursor, page, rating);
+        if (result.ratings() == null || result.items().stream()
+                .anyMatch(item -> !result.ratings().containsKey(item.fundCode())
+                        || result.ratings().get(item.fundCode()) == null)) {
+            throw new AiServiceUnavailableException("评级筛选暂不可用，请稍后重试。", null);
+        }
+        return withRatings(toPageResponse(result), result.ratings());
+    }
+
+    /**
      * 每页最多 100 只基金，共用一次已发布评级查询，再按基金代码匹配，保持原列表顺序与分页。
      * 基础资料从缓存降级时也重新读取评级，避免已撤回或过期的缓存等级继续展示。
      * 查询仅核验已有结果，不触发计算；失败及缺项返回 null，由前端区分为“评级暂不可用”。
@@ -94,7 +111,11 @@ public class InternalFundQueryService implements FundQueryService {
             LOGGER.warn("InternalFundQueryService.withCurrentRatings   >>> ratings unavailable, fundCount={}",
                     page.items().size(), exception);
         }
-        Map<String, FundRatingResponse.Summary> currentRatings = ratings;
+        return withRatings(page, ratings);
+    }
+
+    /** 将同次核验的评级按代码附到列表上，保留目录顺序、总数及分页信息。 */
+    private FundPageResponse withRatings(FundPageResponse page, Map<String, FundRatingResponse.Summary> currentRatings) {
         return new FundPageResponse(
                 page.items().stream().map(item -> new FundSummaryResponse(
                         item.fundCode(), item.fundName(), item.fundType(), item.status(), item.asOfDate(),
