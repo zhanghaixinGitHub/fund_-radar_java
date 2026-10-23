@@ -13,7 +13,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** 权限、参数、同基金公共语义与不含分数的 DTO 契约。 */
+/** 权限、参数、同基金公共语义与正式数字分的只读 DTO 契约。 */
 class FundRatingTests {
     @AfterEach void clear() { CurrentUserContext.clear(); }
     private void login(PermissionCode... permissions) {
@@ -65,10 +65,43 @@ class FundRatingTests {
         verify(service).startFundRatings(null);
     }
 
-    @Test void publicDtoDoesNotContainScoreOrModelFields() {
+    @Test void publicDtoOnlyAddsPublishedScoresToDetailAndDimensions() {
         for (Class<?> type : new Class<?>[]{FundRatingResponse.class, FundRatingResponse.Summary.class,
                 FundRatingResponse.Dimension.class, FundRatingResponse.Comparison.class})
             for (var component : type.getRecordComponents())
-                assertFalse(component.getName().matches("(?i).*(score|weight|methodology|model|version).*"));
+                assertFalse(component.getName().matches("(?i).*(rawScore|weight|methodology|model|version).*"));
+        assertFalse(java.util.Arrays.stream(FundRatingResponse.Summary.class.getRecordComponents())
+                .anyMatch(c -> c.getName().equals("score")));
+    }
+
+    @Test void jsonKeepsPublishedNumericScoresAndMissingScoresStayNull() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var detail = mapper.readValue("""
+                {"fundCode":"002112","status":"RATED","score":"64.12",
+                 "dimensions":[{"key":"liquidity","score":"52.42","explanation":"报告日账面覆盖"}]}
+                """, FundRatingResponse.class);
+        assertEquals("64.12", detail.score());
+        assertEquals("52.42", detail.dimensions().get(0).score());
+        var oldResponse = mapper.readValue("{\"fundCode\":\"002112\",\"status\":\"NOT_RATED\"}",
+                FundRatingResponse.class);
+        assertNull(oldResponse.score());
+    }
+
+    @Test void partialScoreAndRangeNeverBecomeCompleteScoreOrGrade() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var detail = mapper.readValue("""
+                {"fundCode":"000009","status":"PARTIAL","score":null,"grade":null,
+                 "scoreRange":{"lower":"65.57","upper":"67.37"},"partialScore":"67.11",
+                 "scoreCoverage":{"pointWeight":"65","intervalWeight":"35","missingWeight":"0",
+                                  "pointDimensions":5,"intervalDimensions":3},
+                 "dimensions":[{"key":"holdings","score":null,
+                                "scoreRange":{"lower":"59.61","upper":"70.28"}}]}
+                """, FundRatingResponse.class);
+        assertEquals("PARTIAL", detail.status());
+        assertNull(detail.score());
+        assertNull(detail.grade());
+        assertEquals("65.57", detail.scoreRange().lower());
+        assertEquals("65", detail.scoreCoverage().pointWeight());
+        assertEquals("59.61", detail.dimensions().get(0).scoreRange().lower());
     }
 }

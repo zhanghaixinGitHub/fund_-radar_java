@@ -41,6 +41,96 @@ class Direction1dAnalysisTests {
     }
     void validate(ObjectNode p) {String raw=p.toString();Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),"002112",now);}
     @Test void missingLatestNavStillKeepsFixedComparisonDate() throws Exception {assertDoesNotThrow(()->validate(payload()));}
+    ObjectNode publisherPayload() throws Exception {
+        var p=payload();p.put("fund_code","010737");p.put("fund_name","易方达沪深300指数精选增强-C");
+        p.put("task_key","DIRECTION_1D_ANALYSIS_V1:010737:2026-10-12:r1");
+        p.put("generationMethod","COMPREHENSIVE");p.put("analysisPolicyVersion","FUND_COMPREHENSIVE_REVIEW_V1");
+        p.put("analysisPolicyHash","c".repeat(64));p.put("generation_source","CODEX_ASSISTED_REVIEW");
+        var input=(ObjectNode)p.path("input");input.put("fund_code","010737");
+        var provenance=input.putObject("nav_provenance");provenance.put("mode","PER_ROW_PROVENANCE");
+        provenance.set("historical_provider_source_id",input.path("source_id"));
+        var proof=provenance.putObject("supplement");proof.put("policy","OFFICIAL_PUBLISHER_NAV_DOCUMENT_V1");
+        proof.put("source_code","EFUNDS_OFFICIAL_PUBLIC_DOCUMENT");proof.put("document_ref","official-nav");
+        proof.put("url","https://cdn.efunds.com.cn/market/2.0/010737_1y.js");
+        proof.put("body_hash","d".repeat(64));proof.put("raw_sha256","e".repeat(64));
+        proof.put("observed_at","2026-10-09T15:30:00+08:00");proof.put("nav_date","2026-10-09");
+        proof.put("unit_nav","1.0715");proof.put("accum_nav","1.0715");
+        proof.put("provider_same_day_value_present",false);proof.put("nav_daily_unchanged",true);
+        var value=input.withArray("values").addObject();value.put("nav_date","2026-10-09");
+        value.put("unit_nav","1.0715");value.put("accum_nav","1.0715");value.putNull("ann_date");value.putNull("source_id");
+        value.put("source_code","EFUNDS_OFFICIAL_PUBLIC_DOCUMENT");value.put("source_ref","official-nav");
+        value.put("upstream_hash","d".repeat(64));value.put("version_id","material:"+"f".repeat(64));
+        value.put("content_hash","f".repeat(64));value.put("observed_at","2026-10-09T15:30:00+08:00");
+        value.set("expires_at",p.path("deadline_at"));p.put("latest_nav_date","2026-10-09");
+        p.putObject("source_manifest").set("nav_provenance",provenance.deepCopy());return p;
+    }
+    @Test void publisherBaselineKeepsSeparateProvenanceAndOriginalProviderRule() throws Exception {
+        var p=publisherPayload();String original=p.toString();
+        assertDoesNotThrow(()->Direction1dAnalysisPolicy.validate(p,"010737",now));assertEquals(original,p.toString());
+        p.remove("generation_source");assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(p,"010737",now));
+    }
+    @Test void publisherValueCannotUseAnotherFundHostDateOrObservation() throws Exception {
+        for(String field:new String[]{"url","unit_nav","nav_date","observed_at","raw_sha256"}) {
+            var p=publisherPayload();var proof=(ObjectNode)p.path("input").path("nav_provenance").path("supplement");
+            proof.put(field,switch(field) {
+                case "url" -> "https://cdn.efunds.com.cn.evil.test/market/2.0/010737_1y.js";
+                case "unit_nav" -> "1.0716";case "nav_date" -> "2026-10-08";
+                case "observed_at" -> "2026-10-09T16:30:00+08:00";default -> "bad";
+            });
+            ((ObjectNode)p.path("source_manifest")).set("nav_provenance",p.path("input").path("nav_provenance").deepCopy());
+            assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(p,"010737",now),field);
+        }
+        var q=publisherPayload();((ObjectNode)q.path("input").path("values").get(0)).put("source_id",q.path("input").path("source_id").asText());
+        assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(q,"010737",now));
+    }
+    @Test void publisherManifestOrOriginalHashCannotChangeIndependently() throws Exception {
+        var p=publisherPayload();((ObjectNode)p.path("source_manifest").path("nav_provenance")).put("mode","changed");
+        assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(p,"010737",now));
+        var q=publisherPayload();((ObjectNode)q.path("input").path("values").get(0)).put("upstream_hash","0".repeat(64));
+        assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(q,"010737",now));
+    }
+    @Test void realPublisherPayloadWhenSupplied() throws Exception {
+        String path=System.getProperty("publisher.analysis.fixture");if(path==null)return;
+        String raw=Files.readString(Path.of(path));
+        assertDoesNotThrow(()->Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),"010737",Instant.now()));
+    }
+    ObjectNode distributorPayload() throws Exception {
+        var p=publisherPayload();var input=(ObjectNode)p.path("input");
+        var proof=(ObjectNode)input.path("nav_provenance").path("supplement");
+        proof.put("policy","DISCLOSED_DISTRIBUTOR_NAV_DOCUMENT_V1");proof.put("source_code","TTFUND_PUBLIC_DISCLOSED_NAV_DOCUMENT");
+        proof.put("url","https://api.fund.eastmoney.com/f10/lsjz?fundCode=010737&pageIndex=1");
+        proof.put("identity_url","https://fund.eastmoney.com/010737.html");
+        proof.put("disclosure_quote","通过基金销售机构网站披露各类基金份额净值和基金份额累计净值。");
+        for(String field:new String[]{"identity","prospectus","report"}) {
+            proof.put(field+"_ref",field);proof.put(field+"_hash","d".repeat(64));
+        }
+        var prior=input.withArray("values").insertObject(0);prior.put("nav_date","2026-10-08");
+        prior.put("unit_nav","1.0778");prior.set("source_id",input.path("source_id"));prior.put("content_hash","a".repeat(64));
+        prior.put("observed_at","2026-10-09T15:20:00+08:00");
+        var overlap=proof.putArray("provider_overlap").addObject();
+        for(String field:new String[]{"nav_date","unit_nav","source_id","content_hash"})overlap.set(field,prior.path(field));
+        ((ObjectNode)input.path("values").get(1)).put("source_code","TTFUND_PUBLIC_DISCLOSED_NAV_DOCUMENT");
+        ((ObjectNode)p.path("source_manifest")).set("nav_provenance",input.path("nav_provenance").deepCopy());return p;
+    }
+    @Test void disclosedDistributorValueNeedsItsPageClauseAndMatchingProviderHistory() throws Exception {
+        var p=distributorPayload();assertDoesNotThrow(()->Direction1dAnalysisPolicy.validate(p,"010737",now));
+        for(String problem:new String[]{"page","clause","overlap","other_fund"}) {
+            var q=distributorPayload();var proof=(ObjectNode)q.path("input").path("nav_provenance").path("supplement");
+            switch(problem) {
+                case "page" -> proof.put("identity_url","https://fund.eastmoney.com.evil.test/010737.html");
+                case "clause" -> proof.put("disclosure_quote","无法证实的披露渠道");
+                case "overlap" -> ((ObjectNode)proof.path("provider_overlap").get(0)).put("unit_nav","1.0779");
+                default -> proof.put("url","https://api.fund.eastmoney.com/f10/lsjz?fundCode=010736&pageIndex=1");
+            }
+            ((ObjectNode)q.path("source_manifest")).set("nav_provenance",q.path("input").path("nav_provenance").deepCopy());
+            assertThrows(IllegalArgumentException.class,()->Direction1dAnalysisPolicy.validate(q,"010737",now),problem);
+        }
+    }
+    @Test void realDistributorPayloadWhenSupplied() throws Exception {
+        String path=System.getProperty("distributor.analysis.fixture");if(path==null)return;
+        String raw=Files.readString(Path.of(path));String code=json.readTree(raw).path("fund_code").asText();
+        assertDoesNotThrow(()->Direction1dPolicy.validate(json,raw,Direction1dPolicy.hash(raw),code,Instant.now()));
+    }
     /** 其他基金必须有统一规则身份；更换代码、来源或规则摘要均不能借旧试点豁免。 */
     @Test void allFundsUseComprehensiveIdentity() throws Exception {
         var p=payload();p.put("fund_code","016008");((ObjectNode)p.path("input")).put("fund_code","016008");

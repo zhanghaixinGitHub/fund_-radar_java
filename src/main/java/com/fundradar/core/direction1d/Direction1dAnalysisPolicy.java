@@ -53,14 +53,18 @@ public final class Direction1dAnalysisPolicy {
         require(code.equals(input.path("fund_code").asText())&&values.isArray()&&values.size()<=61
             &&at(input,"feature_as_of").equals(asOf),"ANALYSIS_INPUT_INVALID");
         UUID.fromString(input.path("source_id").asText());
-        LocalDate previous=null;
+        LocalDate previous=null;int publisherRows=0;
         for(JsonNode v:values) {
             LocalDate day=LocalDate.parse(v.path("nav_date").asText());
+            boolean publisher=unified&&publisherNav(p,input,v,code,base,asOf,deadline);
             require(!day.isAfter(base)&&(previous==null||day.isAfter(previous))
                 &&new BigDecimal(v.path("unit_nav").asText()).signum()>0
-                &&v.path("source_id").equals(input.path("source_id"))&&!at(v,"observed_at").isAfter(asOf),"ANALYSIS_NAV_INVALID");
+                &&(publisher||v.path("source_id").equals(input.path("source_id")))
+                &&!at(v,"observed_at").isAfter(asOf),"ANALYSIS_NAV_INVALID");
+            if(publisher) publisherRows++;
             previous=day;
         }
+        require(publisherRows<=1,"ANALYSIS_NAV_INVALID");
         require(values.isEmpty()?p.path("latest_nav_date").isNull():previous.toString().equals(p.path("latest_nav_date").asText()),"ANALYSIS_NAV_DATE_INVALID");
         JsonNode a=p.path("analysis"),facts=p.path("evidence");
         require(Set.of("UP","DOWN").contains(a.path("direction").asText())&&"LOW".equals(a.path("confidence").asText())
@@ -106,6 +110,87 @@ public final class Direction1dAnalysisPolicy {
         require(p.path("inventory").isArray()&&p.path("inventory").size()==16
             &&p.path("inventory").equals(narrative.path("inventory")),"ANALYSIS_INVENTORY_INVALID");
         return p;
+    }
+    /**
+     * 接收 Python 已核验的管理人官网基准日原件，不冒用原供应商身份。
+     *
+     * 只允许当前基准日的一行，且公开结果与冻结资料的凭证完全一致；历史行继续
+     * 使用原 source_id 规则。原文、摘要与字段顺序由 Python 本机适配器核验，Java
+     * 在既有服务认证及整包摘要之外再核对基金、域名、原值、实际取得时刻和有效窗口。
+     * 不接受浏览器指定来源，不改变历史净值、评分、方向或结果大小限制。
+     */
+    private static boolean publisherNav(JsonNode p,JsonNode input,JsonNode value,String code,LocalDate base,
+                                        Instant asOf,Instant deadline) {
+        String source=value.path("source_code").asText();
+        boolean issuer="EFUNDS_OFFICIAL_PUBLIC_DOCUMENT".equals(source);
+        boolean distributor="TTFUND_PUBLIC_DISCLOSED_NAV_DOCUMENT".equals(source);
+        if(!issuer&&!distributor) return false;
+        JsonNode provenance=input.path("nav_provenance"),proof=provenance.path("supplement");
+        require("PER_ROW_PROVENANCE".equals(provenance.path("mode").asText())
+            &&provenance.path("historical_provider_source_id").equals(input.path("source_id"))
+            &&provenance.equals(p.path("source_manifest").path("nav_provenance"))
+            &&(issuer?"OFFICIAL_PUBLISHER_NAV_DOCUMENT_V1":"DISCLOSED_DISTRIBUTOR_NAV_DOCUMENT_V1").equals(proof.path("policy").asText())
+            &&proof.path("source_code").equals(value.path("source_code"))
+            &&(!issuer||p.path("fund_name").asText().startsWith("易方达"))
+            &&value.has("source_id")&&value.path("source_id").isNull()
+            &&value.has("ann_date")&&value.path("ann_date").isNull()
+            &&base.toString().equals(value.path("nav_date").asText())
+            &&value.path("nav_date").equals(proof.path("nav_date"))
+            &&value.path("unit_nav").equals(proof.path("unit_nav"))
+            &&value.path("accum_nav").equals(proof.path("accum_nav"))
+            &&new BigDecimal(value.path("accum_nav").asText()).signum()>0
+            &&value.path("source_ref").equals(proof.path("document_ref"))
+            &&text(proof.path("document_ref"),200)
+            &&proof.path("body_hash").asText().matches("[a-f0-9]{64}")
+            &&proof.path("raw_sha256").asText().matches("[a-f0-9]{64}")
+            &&value.path("upstream_hash").equals(proof.path("body_hash"))
+            &&value.path("version_id").asText().matches("material:[a-f0-9]{64}")
+            &&value.path("content_hash").asText().equals(value.path("version_id").asText().substring(9))
+            &&at(value,"observed_at").equals(at(proof,"observed_at"))
+            &&!at(proof,"observed_at").isAfter(asOf)
+            &&!at(proof,"observed_at").isBefore(base.atStartOfDay(Direction1dPolicy.ZONE).toInstant())
+            &&at(value,"expires_at").equals(deadline)
+            &&proof.path("nav_daily_unchanged").isBoolean()&&proof.path("nav_daily_unchanged").asBoolean()
+            &&proof.path("provider_same_day_value_present").isBoolean()&&!proof.path("provider_same_day_value_present").asBoolean(),
+            "ANALYSIS_NAV_PUBLISHER_INVALID");
+        URI uri=URI.create(proof.path("url").asText());
+        require("https".equals(uri.getScheme())&&uri.getUserInfo()==null&&uri.getFragment()==null,
+            "ANALYSIS_NAV_PUBLISHER_INVALID");
+        if(issuer) {
+            require("cdn.efunds.com.cn".equals(uri.getHost())&&uri.getQuery()==null
+                &&("/market/2.0/"+code+"_1y.js").equals(uri.getPath()),"ANALYSIS_NAV_PUBLISHER_INVALID");
+        } else {
+            URI page=URI.create(proof.path("identity_url").asText());
+            require("api.fund.eastmoney.com".equals(uri.getHost())&&"/f10/lsjz".equals(uri.getPath())
+                &&uri.getQuery()!=null
+                &&Arrays.stream(uri.getQuery().split("&")).filter(q->q.startsWith("fundCode=")).toList()
+                    .equals(List.of("fundCode="+code))
+                &&"https".equals(page.getScheme())&&"fund.eastmoney.com".equals(page.getHost())
+                &&("/"+code+".html").equals(page.getPath())&&page.getUserInfo()==null
+                &&page.getQuery()==null&&page.getFragment()==null
+                &&proof.path("disclosure_quote").asText().contains("基金销售机构网站")
+                &&proof.path("disclosure_quote").asText().contains("基金份额净值")
+                &&proof.path("disclosure_quote").asText().contains("基金份额累计净值"),"ANALYSIS_NAV_PUBLISHER_INVALID");
+            for(String field:List.of("identity","prospectus","report"))
+                require(text(proof.path(field+"_ref"),200)&&proof.path(field+"_hash").asText().matches("[a-f0-9]{64}"),
+                    "ANALYSIS_NAV_PUBLISHER_INVALID");
+            JsonNode overlap=proof.path("provider_overlap");
+            require(overlap.isArray()&&!overlap.isEmpty()&&overlap.size()<=61,"ANALYSIS_NAV_PUBLISHER_INVALID");
+            // 每一条历史对照必须是本包已经保留的原供应商行；不能拿另一基金或网页值自证。
+            Set<String> days=new HashSet<>();
+            for(JsonNode item:overlap) {
+                require(LocalDate.parse(item.path("nav_date").asText()).isBefore(base)
+                    &&item.path("source_id").equals(input.path("source_id"))&&days.add(item.path("nav_date").asText()),
+                    "ANALYSIS_NAV_PUBLISHER_INVALID");
+                boolean matched=false;
+                for(JsonNode row:input.path("values"))
+                    if(row.path("source_id").equals(item.path("source_id"))&&row.path("nav_date").equals(item.path("nav_date"))
+                        &&row.path("unit_nav").equals(item.path("unit_nav"))&&row.path("content_hash").equals(item.path("content_hash")))
+                        matched=true;
+                require(matched,"ANALYSIS_NAV_PUBLISHER_INVALID");
+            }
+        }
+        return true;
     }
     /** 新资料保留全部原文来源；旧记录仅有 source 时按原有契约读取，禁止漏掉或替换来源。 */
     private static List<JsonNode> factSources(JsonNode fact) {
