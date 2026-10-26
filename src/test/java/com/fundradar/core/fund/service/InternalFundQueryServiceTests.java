@@ -109,7 +109,10 @@ class InternalFundQueryServiceTests {
                 "SYNCED",
                 List.of(new AiFundManager(
                         "张三", LocalDate.of(2020, 1, 1), LocalDate.of(2020, 1, 1), null,
-                        "硕士", "TUSHARE_PRO_FUND"
+                        "硕士", "TUSHARE_PRO_FUND", new com.fundradar.core.integration.ai.AiFundManagerPerformance(
+                                "AVAILABLE", new BigDecimal("0.123456789012"), LocalDate.of(2020, 1, 2),
+                                LocalDate.of(2026, 8, 25), null, true, "CASH_REINVESTED_NAV_V1"
+                        )
                 )),
                 "SYNCED",
                 new AiFundShareSnapshot(LocalDate.of(2026, 8, 25), new BigDecimal("12345.6000"), "TUSHARE_PRO_FUND"),
@@ -117,6 +120,13 @@ class InternalFundQueryServiceTests {
                 List.of(new AiFundDividend(
                         LocalDate.of(2026, 8, 1), null, null, "实施", null, null, null, null, null,
                         new BigDecimal("0.0100"), null, null, null, null, "2026", "TUSHARE_PRO_FUND"
+                )),
+                List.of(new com.fundradar.core.integration.ai.AiFundManagerPeriod(
+                        LocalDate.of(2026, 8, 1), null, List.of("张三"),
+                        new com.fundradar.core.integration.ai.AiFundManagerPerformance(
+                                "AVAILABLE", new BigDecimal("0.03"), LocalDate.of(2026, 8, 3),
+                                LocalDate.of(2026, 8, 25), null, false, "CASH_REINVESTED_NAV_V1"
+                        )
                 ))
         );
 
@@ -124,6 +134,20 @@ class InternalFundQueryServiceTests {
 
         assertFalse(response.basic().isWatched());
         assertEquals("张三", response.managers().get(0).managerName());
+        // 保留比例、实际净值日期和共管说明，不把收益率提前乘100或把未知值补零。
+        assertEquals(new BigDecimal("0.123456789012"), response.managers().get(0).tenurePerformance().returnRate());
+        assertEquals(LocalDate.of(2020, 1, 2), response.managers().get(0).tenurePerformance().startDate());
+        assertEquals(LocalDate.of(2026, 8, 25), response.managers().get(0).tenurePerformance().endDate());
+        assertTrue(response.managers().get(0).tenurePerformance().includesCoManagement());
+        // 阶段回报独立透传，不能换成个人完整任期的0.123456789012，也不能丢失实际起算净值日。
+        assertEquals(new BigDecimal("0.03"), response.managerPeriods().get(0).performance().returnRate());
+        assertEquals(LocalDate.of(2026, 8, 1), response.managerPeriods().get(0).beginDate());
+        assertEquals(LocalDate.of(2026, 8, 3), response.managerPeriods().get(0).performance().startDate());
+        assertFalse(response.managerPeriods().get(0).performance().includesCoManagement());
+        assertEquals(response.managerPeriods(), response.withWatchStatus().managerPeriods());
+        var legacy = new AiFundWatchlistDetail(source.basic(), source.managersStatus(), source.managers(),
+                source.latestShareStatus(), source.latestShare(), source.dividendsStatus(), source.dividends());
+        assertTrue(InternalFundQueryService.toWatchlistFundDetailResponse(legacy).managerPeriods().isEmpty());
         assertEquals(new BigDecimal("12345.6000"), response.latestShare().fundShare());
         assertEquals(new BigDecimal("0.0100"), response.dividends().get(0).cashDividend());
         assertFalse(response.stale());

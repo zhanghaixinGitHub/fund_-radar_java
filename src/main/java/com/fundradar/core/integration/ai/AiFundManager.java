@@ -11,6 +11,7 @@ public record AiFundManager(
         @JsonProperty("begin_date") LocalDate beginDate,
         @JsonProperty("end_date") LocalDate endDate,
         String education,
-        @JsonProperty("data_source") String dataSource
+        @JsonProperty("data_source") String dataSource,
+        @JsonProperty("tenure_performance") AiFundManagerPerformance tenurePerformance
 ) {
 }

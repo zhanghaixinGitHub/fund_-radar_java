@@ -13,8 +13,16 @@ public record WatchlistFundDetailResponse(
         String dividendsStatus,
         List<FundDividendResponse> dividends,
         boolean stale,
-        Instant cachedAt
+        Instant cachedAt,
+        List<FundManagerPeriodResponse> managerPeriods
 ) {
+    /** 保留原详情构造入口；缺少阶段资料时返回空列表，不伪造阶段回报。 */
+    public WatchlistFundDetailResponse(FundDetailResponse basic, String managersStatus,
+            List<FundManagerResponse> managers, String latestShareStatus, FundShareSnapshotResponse latestShare,
+            String dividendsStatus, List<FundDividendResponse> dividends, boolean stale, Instant cachedAt) {
+        this(basic, managersStatus, managers, latestShareStatus, latestShare, dividendsStatus,
+                dividends, stale, cachedAt, List.of());
+    }
 
     /** 仅在 Java 对浏览器输出时标记该用户已关注，避免把用户态传给 Python。 */
     public WatchlistFundDetailResponse withWatchStatus() {
@@ -32,7 +40,8 @@ public record WatchlistFundDetailResponse(
                 dividendsStatus,
                 dividends,
                 stale,
-                cachedAt
+                cachedAt,
+                managerPeriods
         );
     }
 }

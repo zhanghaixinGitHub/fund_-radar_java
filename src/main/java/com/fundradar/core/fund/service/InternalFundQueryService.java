@@ -3,6 +3,9 @@ package com.fundradar.core.fund.service;
 import com.fundradar.core.fund.api.FundDetailResponse;
 import com.fundradar.core.fund.api.FundDividendResponse;
 import com.fundradar.core.fund.api.FundManagerResponse;
+import com.fundradar.core.fund.api.FundManagerPerformanceResponse;
+import com.fundradar.core.fund.api.FundManagerPeriodResponse;
+import com.fundradar.core.integration.ai.AiFundManagerPerformance;
 import com.fundradar.core.fund.api.FundNavHistoryResponse;
 import com.fundradar.core.fund.api.FundNavPointResponse;
 import com.fundradar.core.fund.api.FundPageResponse;
@@ -245,7 +248,8 @@ public class InternalFundQueryService implements FundQueryService {
                 fund.managers().stream()
                         .map(item -> new FundManagerResponse(
                                 item.managerName(), item.annDate(), item.beginDate(), item.endDate(),
-                                item.education(), item.dataSource()
+                                item.education(), item.dataSource(),
+                                toManagerPerformanceResponse(item.tenurePerformance())
                         ))
                         .toList(),
                 fund.latestShareStatus(),
@@ -262,7 +266,20 @@ public class InternalFundQueryService implements FundQueryService {
                         ))
                         .toList(),
                 false,
-                null
+                null,
+                fund.managerPeriods() == null ? java.util.List.of() : fund.managerPeriods().stream()
+                        .map(period -> new FundManagerPeriodResponse(
+                                period.beginDate(), period.endDate(), period.managerNames(),
+                                toManagerPerformanceResponse(period.performance())
+                        )).toList()
+        );
+    }
+
+    /** 两种回报统一保留比例、端点和缺失状态；Java不重新计算或相加百分比。 */
+    private static FundManagerPerformanceResponse toManagerPerformanceResponse(AiFundManagerPerformance value) {
+        return value == null ? null : new FundManagerPerformanceResponse(
+                value.status(), value.returnRate(), value.startDate(), value.endDate(), value.reason(),
+                value.includesCoManagement(), value.calculationBasis()
         );
     }
 

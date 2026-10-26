@@ -9,6 +9,7 @@ public record FundManagerResponse(
         LocalDate beginDate,
         LocalDate endDate,
         String education,
-        String dataSource
+        String dataSource,
+        FundManagerPerformanceResponse tenurePerformance
 ) {
 }
