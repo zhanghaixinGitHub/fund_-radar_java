@@ -11,6 +11,18 @@ public record FundSameTypeComparisonResponse(
         LocalDate asOfDate,
         Integer targetRank,
         int comparableCount,
-        List<FundSameTypeComparisonItemResponse> items
+        List<FundSameTypeComparisonItemResponse> items,
+        FundComparisonGroupResponse comparisonGroup,
+        LocalDate comparisonStartDate,
+        String sampleUnit,
+        Integer comparableProductCount,
+        String reason
 ) {
+    /** 旧调用仍只表达份额对照；新增产品数没有核实前保持未知。 */
+    public FundSameTypeComparisonResponse(String fundType, String scope, String status, LocalDate asOfDate,
+                                          Integer targetRank, int comparableCount,
+                                          List<FundSameTypeComparisonItemResponse> items) {
+        this(fundType, scope, status, asOfDate, targetRank, comparableCount, items,
+                null, null, "SHARE_CLASS", null, null);
+    }
 }

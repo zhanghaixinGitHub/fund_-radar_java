@@ -6,6 +6,7 @@ import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
 import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.integration.ai.AiFundDetail;
+import com.fundradar.core.integration.ai.AiFundComparisonGroup;
 import com.fundradar.core.integration.ai.AiFundDividend;
 import com.fundradar.core.integration.ai.AiFundManager;
 import com.fundradar.core.integration.ai.AiFundNavHistory;
@@ -29,6 +30,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 验证 Python 内部净值字段能完整映射到 Java 对外详情契约。 */
 class InternalFundQueryServiceTests {
+
+    @Test
+    void mapsVerifiedPeerCriteriaWindowAndInsufficientReasonWithoutInventingProductCount() {
+        var source = new AiFundSameTypeComparison(
+                "002112", "MIXED", "VERIFIED_CURRENT_MARKET_PEER_GROUP", "NO_PEERS",
+                LocalDate.of(2026, 10, 23), null, 1,
+                List.of(new AiFundSameTypeComparisonItem(1, "002112", "夹具基金", "MIXED",
+                        LocalDate.of(2026, 10, 23), new BigDecimal("-0.317373358348968105"), "TEST_SOURCE")),
+                new AiFundComparisonGroup("境内灵活配置混合基金", "股票0%-95%，同C类份额。", "VERIFIED_DISCLOSURE"),
+                LocalDate.of(2026, 9, 23), "PRODUCT", 1, "暂无其他可比基金。"
+        );
+        var response = InternalFundQueryService.toSameTypeComparisonResponse(source);
+        assertEquals("境内灵活配置混合基金", response.comparisonGroup().name());
+        assertEquals("股票0%-95%，同C类份额。", response.comparisonGroup().description());
+        assertEquals(LocalDate.of(2026, 9, 23), response.comparisonStartDate());
+        assertEquals("PRODUCT", response.sampleUnit());
+        assertEquals(1, response.comparableProductCount());
+        assertEquals("暂无其他可比基金。", response.reason());
+        assertEquals(new BigDecimal("-0.317373358348968105"), response.items().get(0).monthChangeRate());
+
+        var missing = InternalFundQueryService.toSameTypeComparisonResponse(new AiFundSameTypeComparison(
+                "002112", "MIXED", "VERIFIED_CURRENT_MARKET_PEER_GROUP", "CLASSIFICATION_INSUFFICIENT",
+                null, null, 0, List.of(), null, null, "PRODUCT", null, "分类资料不足。"));
+        assertEquals(null, missing.comparisonGroup());
+        assertEquals(null, missing.comparableProductCount());
+        assertTrue(missing.items().isEmpty());
+    }
 
     @Test
     void mapsLatestNavSnapshotWithoutLosingDecimalPrecision() {

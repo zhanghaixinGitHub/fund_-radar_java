@@ -143,7 +143,7 @@ public class FundController {
     }
 
     /**
-     * 查询当前基金市场范围内的同类型比较；仅展示同净值日期的一月涨跌事实，不能解读为全市场排名。
+     * 查询已收录范围内的同类比较；按核实的合同约束、独立产品和共同区间展示，不解读为全市场排名。
      * 关联文档：docs_zhx/requirements/fund-detail-expansion.md、
      * docs_zhx/design/fund-detail-expansion.md、docs_zhx/testcase/fund-detail-expansion.md。
      */

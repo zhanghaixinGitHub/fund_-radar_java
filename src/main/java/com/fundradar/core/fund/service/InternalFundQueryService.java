@@ -12,6 +12,7 @@ import com.fundradar.core.fund.api.FundPageResponse;
 import com.fundradar.core.fund.api.FundRatingResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonItemResponse;
 import com.fundradar.core.fund.api.FundSameTypeComparisonResponse;
+import com.fundradar.core.fund.api.FundComparisonGroupResponse;
 import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.fund.api.FundShareSnapshotResponse;
 import com.fundradar.core.fund.api.FundSummaryResponse;
@@ -322,7 +323,12 @@ public class InternalFundQueryService implements FundQueryService {
                                 item.rank(), item.fundCode(), item.fundName(), item.fundType(), item.asOfDate(),
                                 item.monthChangeRate(), item.dataSource()
                         ))
-                        .toList()
+                        .toList(),
+                comparison.comparisonGroup() == null ? null : new FundComparisonGroupResponse(
+                        comparison.comparisonGroup().name(), comparison.comparisonGroup().description(),
+                        comparison.comparisonGroup().basis()),
+                comparison.comparisonStartDate(), comparison.sampleUnit(), comparison.comparableProductCount(),
+                comparison.reason()
         );
     }
 
