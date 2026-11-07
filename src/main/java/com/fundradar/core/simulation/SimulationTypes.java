@@ -53,7 +53,28 @@ public final class SimulationTypes {
                            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal holdingGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal holdingGainRate, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal realizedGain,
                            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dividendGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal receivableDividend, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal paidDividend,
                            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal totalBuy,
-                           @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal totalSell, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal unitNav, LocalDate navDate, String issue) {}
+                           @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal totalSell, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal unitNav, LocalDate navDate, String issue,
+                           boolean estimatedShares, LocalDate openingDate) {
+        /** 既有已知份额账本及调用方沿用原构造方式，不因新增期初元数据改变语义。 */
+        public Position(String fundCode,String fundName,BigDecimal shares,BigDecimal frozenShares,
+                        BigDecimal availableShares,BigDecimal cost,BigDecimal marketValue,BigDecimal holdingGain,
+                        BigDecimal holdingGainRate,BigDecimal realizedGain,BigDecimal dividendGain,BigDecimal receivableDividend,
+                        BigDecimal paidDividend,BigDecimal cumulativeGain,BigDecimal dailyGain,BigDecimal totalBuy,
+                        BigDecimal totalSell,BigDecimal unitNav,LocalDate navDate,String issue) {
+            this(fundCode,fundName,shares,frozenShares,availableShares,cost,marketValue,holdingGain,holdingGainRate,
+                    realizedGain,dividendGain,receivableDividend,paidDividend,cumulativeGain,dailyGain,totalBuy,totalSell,
+                    unitNav,navDate,issue,false,null);
+        }
+    }
+    /** 期初余额独立于买卖订单；startDate 为开始统计日，navDate 为折算依据，均不代表真实购买日。 */
+    public record OpeningBalance(UUID snapshotId,String fundCode,String fundName,LocalDate startDate,LocalDate navDate,
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal unitNav,
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal shares,
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal marketValue,
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cost,
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain) {}
+    /** 昨日固定指北京时间前一自然日；缺少该日完整收益时金额为空，不能借用最近净值日或录入值。 */
+    public record YesterdayIncome(LocalDate date,List<SimulationEarnings.Detail> funds) {}
     public record Daily(LocalDate date, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal marketValue, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain) {}
     public record DividendEntry(String eventKey, LocalDate exDate, LocalDate payDate,
                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal shares, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cashPerUnit, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal amount,
@@ -70,10 +91,24 @@ public final class SimulationTypes {
     public record JobState(String status, Instant attemptedAt, Instant completedAt, String message) {}
     /** 管理员手动补录定投的结果；按前一交易日净值补入一期，统计只含本次实际处理。 */
     public record RecurringRunResult(Instant ranAt, int plansChecked, int ordersCreated, int plansSkipped, String message) {}
+    /** 已由本人截图确认、仍在本人关注中，但尚无模拟账本的基金；仅补充名单，不推算金额或份额。 */
+    public record HoldingReference(String fundCode, String fundName) {}
+    /** 截图原始金额及收益；没有份额、成本、净值和交易日期，不得用于重估或卖出。 */
+    public record ConfirmedHolding(String fundCode,String fundName,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedAmount,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedWeightPct,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedDailyGainAmount,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedHoldingGainAmount,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedHoldingGainPct,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reportedCumulativeGainAmount) {}
+    /** dataAsOfDate 为截图明确展示的日期，未展示时为空；recordedAt 仅是导入时间。 */
+    public record ConfirmedBaseline(UUID snapshotId,LocalDate dataAsOfDate,Instant recordedAt,List<ConfirmedHolding> holdings) {}
     public record Overview(List<Position> positions, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal marketValue, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal holdingGain,
                            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal pendingBuyAmount, int pendingOrders,
-                           boolean complete, JobState job, String rules) {}
+                           boolean complete, JobState job, String rules, List<HoldingReference> unrecordedHoldings,
+                           ConfirmedBaseline confirmedBaseline, YesterdayIncome yesterdayIncome) {}
     public record Preview(String fundCode, String fundName, boolean supported, String reason,
                           @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal referenceNav, LocalDate referenceDate, LocalDate tradeDate,
-                          LocalDate eligibleDate, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal availableShares, int pendingBuys, String rules) {}
+                          LocalDate eligibleDate, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal availableShares, int pendingBuys, String rules,
+                          boolean estimatedShares) {}
 }

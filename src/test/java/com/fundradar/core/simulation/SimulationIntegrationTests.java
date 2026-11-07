@@ -25,6 +25,7 @@ class SimulationIntegrationTests {
     @Autowired SimulationService service;
     @Autowired SimulationFeeService fees;
     @Autowired SimulationRepository repo;
+    @Autowired com.fundradar.core.portfolio.importer.ConfirmedPortfolioResetService screenshotReset;
     @Autowired JdbcClient db;
     @Autowired org.springframework.web.context.WebApplicationContext web;
     @MockitoBean SimulationMarketClient client;
@@ -82,6 +83,137 @@ class SimulationIntegrationTests {
         equal("1.21",repo.order(user,sell.orderId()).execution().unitNav());
         equal("0",service.overview().positions().get(0).shares());
         assertTrue(service.overview().positions().get(0).realizedGain().signum()>0);
+    }
+
+    /** 最新本人截图与本人关注共同限定补列范围；有账本、旧截图和其他用户的基金都不能混入。 */
+    @Test void confirmedFundListIsIsolatedAndNeverCreatesSimulatedBalances() {
+        UUID other=createUser();
+        UUID old=confirmedSnapshot(user,"2026-09-01T00:00:00Z");
+        UUID latest=confirmedSnapshot(user,"2026-09-02T00:00:00Z");
+        UUID foreign=confirmedSnapshot(other,"2026-09-03T00:00:00Z");
+        confirmedFund(old,"000002"); confirmedFund(latest,"000001"); confirmedFund(latest,"000003");
+        confirmedFund(latest,"000004"); confirmedFund(foreign,"000005");
+        for (String code : List.of("000001","000002","000003","000005")) {
+            db.sql("INSERT INTO watchlist_item(watchlist_item_id,user_id,fund_code) VALUES (:id,:user,:code)")
+                    .param("id",UUID.randomUUID()).param("user",user).param("code",code).update();
+        }
+        service.place(buy("100"));
+        var before=service.overview();
+        assertEquals(List.of(new HoldingReference("000003","确认基金000003")),before.unrecordedHoldings());
+        equal("0",before.marketValue()); equal("100",before.pendingBuyAmount());
+        assertEquals(1,before.positions().size());
+        assertEquals(1,service.orders(1,20,null).totalCount());
+        db.sql("DELETE FROM watchlist_item WHERE user_id=:user AND fund_code='000003'").param("user",user).update();
+        assertTrue(service.overview().unrecordedHoldings().isEmpty());
+        login(other);
+        assertTrue(service.overview().unrecordedHoldings().isEmpty());
+        assertTrue(service.overview().positions().isEmpty());
+    }
+    UUID confirmedSnapshot(UUID owner,String importedAt) {
+        UUID id=UUID.randomUUID();
+        db.sql("""
+            INSERT INTO portfolio_snapshot(snapshot_id,user_id,source_kind,data_as_of_status,source_description,source_content_hash,imported_at)
+            VALUES (:id,:owner,'USER_CONFIRMED_SCREENSHOT','UNKNOWN','事务内确认名单测试',:hash,CAST(:at AS timestamptz))
+            """).param("id",id).param("owner",owner).param("hash",id.toString()).param("at",importedAt).update();
+        return id;
+    }
+    void confirmedFund(UUID snapshot,String code) {
+        db.sql("""
+            INSERT INTO portfolio_holding_snapshot(holding_snapshot_id,snapshot_id,fund_code,fund_name,reported_amount,
+              reported_weight_pct,reported_daily_gain_amount,reported_holding_gain_amount,reported_holding_gain_pct,reported_cumulative_gain_amount)
+            VALUES (:id,:snapshot,:code,:name,123,1,0,0,0,0)
+            """).param("id",UUID.randomUUID()).param("snapshot",snapshot).param("code",code).param("name","确认基金"+code).update();
+    }
+
+    UUID openingSource() {
+        repo.lock(user); UUID snapshot=confirmedSnapshot(user,"2026-09-07T00:00:00Z"); confirmedFund(snapshot,"000001");
+        db.sql("""
+            UPDATE portfolio_holding_snapshot SET reported_amount=123.45,reported_holding_gain_amount=-5,
+                reported_cumulative_gain_amount=-2 WHERE snapshot_id=:id
+            """).param("id",snapshot).update();
+        db.sql("UPDATE sim_account SET baseline_snapshot_id=:id WHERE user_id=:u").param("id",snapshot).param("u",user).update();
+        return snapshot;
+    }
+    /** 明确采用后只有一份活动余额；原确认值、定投与其他用户保持隔离，不生成虚构申购订单。 */
+    @Test void adoptOpeningBalancesIsIdempotentAndReplaysBuySellInOneLedger() {
+        UUID other=createUser(); login(other); service.place(buy("20")); login(user);
+        UUID snapshot=openingSource();
+        assertEquals(1,service.adoptConfirmedHoldings()); assertEquals(0,service.adoptConfirmedHoldings());
+        var overview=service.overview(); var p=overview.positions().get(0);
+        assertNull(overview.confirmedBaseline()); equal("123.45",overview.marketValue()); equal("-5",overview.holdingGain());
+        equal("-2",overview.cumulativeGain()); assertTrue(p.estimatedShares());
+        assertEquals(0,service.orders(1,20,null).totalCount());
+        assertEquals(snapshot,repo.openingBalances(user).get("000001").snapshotId());
+        assertEquals(1,service.earningsFunds("",1,20).totalCount());
+        assertNull(overview.yesterdayIncome().funds().get(0).dailyGain());
+        service.place(buy("10")); settle("2026-09-08T09:00:00");
+        equal("133.45",service.preview("000001").availableShares());
+        service.place(sell("50")); settle("2026-09-08T21:00:00");
+        equal("83.45",service.overview().positions().get(0).shares());
+        assertNull(service.overview().confirmedBaseline());
+        assertEquals(1,repo.openingBalances(user).size());
+        now=at("2026-09-09T08:00:00");
+        equal("13.345",service.overview().yesterdayIncome().funds().get(0).dailyGain());
+        login(other); assertEquals(1,service.orders(1,20,null).totalCount()); assertTrue(repo.openingBalances(other).isEmpty());
+    }
+    @Test void cancellingAnOrderNeverDeletesTheOpeningBalanceAndPreflightFailureWritesNothing() {
+        openingSource(); current=market(List.of(),List.of());
+        assertThrows(SimulationException.class,() -> service.adoptConfirmedHoldings());
+        assertTrue(repo.openingBalances(user).isEmpty()); assertNotNull(service.overview().confirmedBaseline());
+        current=market(List.of(nav("2026-09-07","1")),List.of()); service.adoptConfirmedHoldings();
+        var buy=service.place(buy("10")); service.cancel(buy.orderId());
+        assertEquals(1,repo.positions(user).size()); equal("123.45",service.overview().marketValue());
+        assertTrue(repo.marketNeeds().containsKey("000001"));
+    }
+    @Test void yesterdayUsesExactBeijingDateAndNeverLatestOrOpeningDayIncome() {
+        service.place(buy("1000")); settle("2026-09-08T21:00:00");
+        var sameEvening=service.overview().yesterdayIncome();
+        assertEquals(date("2026-09-07"),sameEvening.date()); equal("0",sameEvening.funds().get(0).dailyGain());
+        now=at("2026-09-09T00:00:00"); equal("100",service.overview().yesterdayIncome().funds().get(0).dailyGain());
+        now=at("2026-09-14T08:00:00"); var weekend=service.overview().yesterdayIncome();
+        assertEquals("NON_TRADING",weekend.funds().get(0).status()); equal("0",weekend.funds().get(0).dailyGain());
+        now=at("2026-09-15T08:00:00"); assertNull(service.overview().yesterdayIncome().funds().get(0).dailyGain());
+    }
+
+    /** 删除本人旧账，截图汇总不生成虚构订单；重复导入不能再次清掉后续交易，其他用户保持隔离。 */
+    @Test void screenshotResetReplacesHistoryAndPreservesReportedTotalsWithoutInventingTrades() {
+        UUID other=createUser(); login(other); service.place(buy("20")); login(user);
+        var old=service.place(buy("100")); settle("2026-09-08T09:00:00");
+        for(String code:List.of("000001","000002")) db.sql("INSERT INTO watchlist_item(watchlist_item_id,user_id,fund_code) VALUES(:id,:u,:c)")
+                .param("id",UUID.randomUUID()).param("u",user).param("c",code).update();
+        var input=screenshotInput();
+        var reset=screenshotReset.reset(input);
+        assertFalse(reset.alreadyApplied()); assertEquals(2,reset.holdings()); assertEquals(1,reset.plans());
+        assertTrue(service.overview().positions().isEmpty());
+        assertEquals(0,service.orders(1,20,null).totalCount()); assertEquals(0,service.ledger(1,20,null).totalCount());
+        assertTrue(repo.performance(user,"000001",date("2026-09-01"),date("2026-09-10")).isEmpty());
+        var overview=service.overview();
+        equal("133.45",overview.marketValue()); equal("-4",overview.holdingGain()); equal("0",overview.cumulativeGain());
+        assertFalse(overview.complete()); assertNull(overview.confirmedBaseline().dataAsOfDate());
+        assertEquals(48,repo.plans(user).get(0).orderedPeriods()); equal("510",repo.plans(user).get(0).investedAmount());
+        assertThrows(SimulationException.class,()->repo.order(user,old.orderId()));
+        service.place(buy("10"));
+        assertTrue(screenshotReset.reset(input).alreadyApplied());
+        assertEquals(1,service.orders(1,20,null).totalCount());
+        settle("2026-09-09T11:00:00");
+        equal("133.45",service.overview().marketValue().subtract(service.overview().positions().stream().map(Position::marketValue).reduce(num("0"),java.math.BigDecimal::add)));
+        assertEquals(49,repo.plans(user).get(0).orderedPeriods());
+        login(other); assertEquals(1,service.orders(1,20,null).totalCount()); assertNull(service.overview().confirmedBaseline());
+    }
+    /** 名单不匹配时拒绝清空，用户现有订单和截图指针保持原状。 */
+    @Test void screenshotResetRejectsUnconfirmedScopeBeforeDeletingHistory() {
+        service.place(buy("100"));
+        assertThrows(IllegalArgumentException.class,()->screenshotReset.reset(screenshotInput()));
+        assertEquals(1,service.orders(1,20,null).totalCount()); assertNull(service.overview().confirmedBaseline());
+    }
+    com.fundradar.core.portfolio.importer.ConfirmedPortfolioResetService.Input screenshotInput() {
+        var holdings=List.of(new com.fundradar.core.portfolio.importer.LocalPortfolioSnapshotInput.LocalPortfolioHoldingInput(
+                "000001","截图基金一",num("123.45"),num("80"),num("0"),num("-5"),num("-4.28"),num("-2")),
+                new com.fundradar.core.portfolio.importer.LocalPortfolioSnapshotInput.LocalPortfolioHoldingInput(
+                "000002","截图基金二",num("10"),num("5"),num("0"),num("1"),num("10"),num("2")));
+        return new com.fundradar.core.portfolio.importer.ConfirmedPortfolioResetService.Input(
+                new com.fundradar.core.portfolio.importer.LocalPortfolioSnapshotInput("USER_CONFIRMED_SCREENSHOT","UNKNOWN",null,"事务内用户确认截图",holdings),
+                List.of(new com.fundradar.core.portfolio.importer.ConfirmedPortfolioResetService.ReportedPlan("000001",num("10"),48,num("510"),date("2026-09-09"))));
     }
 
     @Test void buyIsIdempotentAndPendingSharesCannotBeSold() {

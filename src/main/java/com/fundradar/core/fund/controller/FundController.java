@@ -98,7 +98,7 @@ public class FundController {
                     message = "基金类型筛选参数无效。"
             ) String fundType,
             @RequestParam(required = false) @jakarta.validation.constraints.Pattern(
-                    regexp = "^(EXCELLENT|GOOD|AVERAGE|WEAK|UNRATED|PENDING)$",
+                    regexp = "^(EXCELLENT|GOOD|AVERAGE|WEAK|SCORED|UNRATED|PENDING)$",
                     message = "基金评级筛选参数无效。"
             ) String rating
     ) {

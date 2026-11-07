@@ -48,6 +48,8 @@ public class SimulationService {
     }
     private Overview overview(UUID user) {
         var positions=repo.positions(user);
+        var baseline=repo.confirmedBaseline(user);
+        var confirmed=baseline==null ? List.<ConfirmedHolding>of() : baseline.holdings();
         // 汇总待确认金额不依赖当前分页，避免大额待处理交易被分页隐藏。
         var totals=repo.pendingTotals(user);
         var valued=positions.stream().filter(p -> p.shares().signum()>0).toList();
@@ -55,8 +57,82 @@ public class SimulationService {
         boolean complete=positions.stream().noneMatch(p -> p.issue()!=null) && valued.stream().allMatch(p -> p.navDate()!=null) && dates.size()<=1;
         // 最近一期收益只合计已公布净值的持仓；全部未公布时保持未知，不能按零收益展示。
         var dailyGain=positions.stream().map(Position::dailyGain).filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
-        return new Overview(positions,sum(positions,Position::marketValue),sum(positions,Position::holdingGain),
-                sum(positions,Position::cumulativeGain),dailyGain,totals.amount(),totals.count(),complete,repo.job("settlement"),RULES);
+        // 尚未转为期初持仓的确认余额没有完整日收益，不能把录入时的日收益冒充当前收益。
+        if(baseline!=null) dailyGain=null;
+        return new Overview(positions,sum(positions,Position::marketValue).add(sumConfirmed(confirmed,ConfirmedHolding::reportedAmount)),
+                sum(positions,Position::holdingGain).add(sumConfirmed(confirmed,ConfirmedHolding::reportedHoldingGainAmount)),
+                sum(positions,Position::cumulativeGain).add(sumConfirmed(confirmed,ConfirmedHolding::reportedCumulativeGainAmount)),
+                dailyGain,totals.amount(),totals.count(),complete && baseline==null,repo.job("settlement"),RULES,
+                baseline==null ? repo.unrecordedHoldings(user) : List.of(),baseline,yesterdayIncome(user,positions,confirmed));
+    }
+    /** 批量读取昨日账务；节假日零收益须由已核验日历确认，不从星期几猜测，也不把跨日收益挪到昨日。 */
+    private YesterdayIncome yesterdayIncome(UUID user,List<Position> positions,List<ConfirmedHolding> unadopted) {
+        LocalDate date=clock.instant().atZone(SimulationCalendar.ZONE).toLocalDate().minusDays(1);
+        var values=repo.earningsDetails(user,positions.stream().map(Position::fundCode).toList(),date);
+        var funds=repo.earningsFunds(user,null);
+        var calendar=positions.isEmpty() ? null : earningsCalendar();
+        var details=new ArrayList<SimulationEarnings.Detail>();
+        for(var p:positions) {
+            var fund=funds.stream().filter(f -> f.fundCode().equals(p.fundCode())).findFirst().orElse(null);
+            var value=values.get(p.fundCode());
+            String status=p.issue()!=null ? "REVIEW" : fund==null || date.isBefore(fund.firstDate()) ? "MISSING"
+                    : value!=null ? value.dailyGain()==null ? "MISSING" : "COMPLETE"
+                    : SimulationEarnings.missingStatus(date,fund.lastDate(),calendar);
+            BigDecimal gain="COMPLETE".equals(status) ? value.dailyGain() : "NON_TRADING".equals(status) ? ZERO : null;
+            details.add(new SimulationEarnings.Detail(p.fundCode(),p.fundName(),status,gain,
+                    value==null || p.issue()!=null ? null : value.cumulativeGain()));
+        }
+        for(var h:unadopted) {
+            details.removeIf(d -> d.fundCode().equals(h.fundCode()));
+            details.add(new SimulationEarnings.Detail(h.fundCode(),h.fundName(),"MISSING",null,null));
+        }
+        return new YesterdayIncome(date,details);
+    }
+    /**
+     * 仅在用户明确接受份额估算后由本机执行器调用，不提供读取即写入的自动转换。
+     * 行情在事务外读取；全部可折算才按本人账户锁一次性采用，原记录、定投和后续订单均保留。
+     */
+    public int adoptConfirmedHoldings() {
+        UUID user=writer(); var baseline=repo.confirmedBaseline(user);
+        if(baseline==null) return 0;
+        Instant now=clock.instant(); var calendar=new SimulationCalendar(marketClient.calendar());
+        LocalDate start=calendar.today(now);
+        var openings=new ArrayList<OpeningBalance>(); var markets=new HashMap<String,Market>();
+        for(var h:baseline.holdings()) {
+            var market=marketClient.market(h.fundCode(),start.minusDays(35),start);
+            if(!market.supported()) throw new SimulationException("SIM_UNSUPPORTED",market.reason());
+            var nav=market.navs().stream().filter(n -> !n.navDate().isAfter(start)
+                    && (n.announcedOn()==null || !n.announcedOn().isAfter(start)))
+                    .max(Comparator.comparing(Nav::navDate)).orElseThrow(() ->
+                            new SimulationException("SIM_DATA_REVIEW",h.fundCode()+"缺少已公布净值，未转换持仓。"));
+            if(nav.unitNav()==null || nav.unitNav().signum()<=0)
+                throw new SimulationException("SIM_DATA_REVIEW",h.fundCode()+"净值无效，未转换持仓。");
+            BigDecimal cost=h.reportedAmount().subtract(h.reportedHoldingGainAmount());
+            BigDecimal shares=h.reportedAmount().divide(nav.unitNav(),8,java.math.RoundingMode.DOWN);
+            if(cost.signum()<0 || shares.signum()<=0)
+                throw new SimulationException("SIM_DATA_REVIEW",h.fundCode()+"金额不能形成有效期初持仓，未转换持仓。");
+            openings.add(new OpeningBalance(baseline.snapshotId(),h.fundCode(),h.fundName(),start,nav.navDate(),nav.unitNav(),
+                    shares,h.reportedAmount(),cost,h.reportedCumulativeGainAmount()));
+            markets.put(h.fundCode(),market);
+        }
+        return tx.execute(status -> {
+            repo.lock(user);
+            var current=repo.confirmedBaseline(user);
+            if(current==null) return 0;
+            if(!repo.hash(current).equals(repo.hash(baseline)))
+                throw new SimulationException("SIM_DATA_REVIEW","持仓资料已变化，请重新核对后录入。");
+            var fees=repo.loadFees();
+            for(var opening:openings) {
+                var calculation=SimulationAccounting.calculate(opening.fundCode(),opening.fundName(),repo.orders(user,opening.fundCode()),
+                        markets.get(opening.fundCode()),calendar,start,fees,opening);
+                repo.saveOpeningBalance(user,opening,now); repo.saveCalculation(user,calculation,now);
+            }
+            repo.audit(user,"SIM_OPENING_BALANCES_ADOPTED",baseline.snapshotId().toString());
+            return openings.size();
+        });
+    }
+    private BigDecimal sumConfirmed(List<ConfirmedHolding> holdings,java.util.function.Function<ConfirmedHolding,BigDecimal> field) {
+        return holdings.stream().map(field).reduce(ZERO,BigDecimal::add);
     }
     private BigDecimal sum(List<Position> positions,java.util.function.Function<Position,BigDecimal> field) {
         return positions.stream().map(field).reduce(ZERO,BigDecimal::add);
@@ -72,7 +148,8 @@ public class SimulationService {
         String issue=position==null ? null : position.issue();
         return new Preview(code,market.fundName(),market.supported() && issue==null,issue!=null ? issue : market.reason(),
                 last==null ? null : last.unitNav(),last==null ? null : last.navDate(),trade,calendar.next(trade),
-                position==null ? ZERO : position.availableShares(),repo.pendingBuys(user,code),RULES);
+                position==null ? ZERO : position.availableShares(),repo.pendingBuys(user,code),RULES,
+                position!=null && position.estimatedShares());
     }
     public Order place(OrderRequest request) {
         UUID user=writer(); validateOrder(request);
@@ -81,7 +158,9 @@ public class SimulationService {
         if (repeated!=null) return matching(repeated,fingerprint);
         Instant now=clock.instant(); var calendar=new SimulationCalendar(marketClient.calendar());
         LocalDate today=calendar.today(now);
-        var market=marketClient.market(request.fundCode(),today.minusDays(35),today);
+        var opening=repo.openingBalances(user).get(request.fundCode());
+        LocalDate marketStart=opening!=null && opening.navDate().isBefore(today.minusDays(35)) ? opening.navDate() : today.minusDays(35);
+        var market=marketClient.market(request.fundCode(),marketStart,today);
         if (!market.supported()) throw new SimulationException("SIM_UNSUPPORTED",market.reason());
         LocalDate trade=calendar.tradeDate(now),eligible=calendar.next(trade);
         return tx.execute(status -> {
@@ -96,7 +175,7 @@ public class SimulationService {
                 // 避免依赖上一轮结算快照在两次结算之间的滞后窗口；行情待核对时退回快照保守值。
                 try {
                     Calculation check=SimulationAccounting.calculate(request.fundCode(),market.fundName(),
-                            repo.orders(user,request.fundCode()),market,calendar,calendar.today(now),repo.loadFees());
+                            repo.orders(user,request.fundCode()),market,calendar,calendar.today(now),repo.loadFees(),opening);
                     available=check.position().availableShares().subtract(check.position().frozenShares());
                 } catch(SimulationException ignored) { /* 结算暂不可重放，沿用快照可用份额 */ }
                 if (position==null || request.shares().compareTo(available)>0) {
@@ -278,6 +357,7 @@ public class SimulationService {
             repo.lock(user);
             // 费率规则表数据量小（登记基金数×几档），结算时全量加载；量级增长后改为版本号+缓存。
             Map<String,FeeSchedule> fees=repo.loadFees();
+            var openings=repo.openingBalances(user);
             for(var plan : repo.plans(user)) if(plan.status().equals("ACTIVE")) executePlan(plan,calendar,markets.get(plan.fundCode()),now);
             var codes=new LinkedHashSet<String>(); repo.positions(user).forEach(p -> codes.add(p.fundCode()));
             for(String code : codes) {
@@ -285,7 +365,7 @@ public class SimulationService {
                 if(market==null) { repo.issue(user,code,"行情服务暂不可用，保留上次估值。",now); continue; }
                 try {
                     List<Order> orders=repo.orders(user,code);
-                    Calculation calculation=SimulationAccounting.calculate(code,market.fundName(),orders,market,calendar,calendar.today(now),fees);
+                    Calculation calculation=SimulationAccounting.calculate(code,market.fundName(),orders,market,calendar,calendar.today(now),fees,openings.get(code));
                     repo.saveCalculation(user,calculation,now);
                 } catch(SimulationException error) { repo.issue(user,code,error.getMessage(),now); }
             }
@@ -298,6 +378,7 @@ public class SimulationService {
             repo.lock(user);
             LocalDate today=calendar.today(now);
             Map<String,FeeSchedule> fees=repo.loadFees();
+            var openings=repo.openingBalances(user);
             var codes=new LinkedHashSet<String>();
             for(var plan : repo.plans(user)) if(plan.status().equals("ACTIVE")) {
                 codes.add(plan.fundCode());
@@ -309,7 +390,7 @@ public class SimulationService {
                 if(market==null) { repo.issue(user,code,"行情服务暂不可用，保留上次估值。",now); continue; }
                 try {
                     List<Order> orders=repo.orders(user,code);
-                    Calculation calculation=SimulationAccounting.calculate(code,market.fundName(),orders,market,calendar,calendar.today(now),fees);
+                    Calculation calculation=SimulationAccounting.calculate(code,market.fundName(),orders,market,calendar,calendar.today(now),fees,openings.get(code));
                     repo.saveCalculation(user,calculation,now);
                 } catch(SimulationException error) { repo.issue(user,code,error.getMessage(),now); }
             }

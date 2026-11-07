@@ -41,10 +41,19 @@ public final class SimulationAccounting {
     }
     public static Calculation calculate(String code, String name, List<Order> input, Market market,
                                         SimulationCalendar calendar, LocalDate today, Map<String,FeeSchedule> fees) {
+        return calculate(code,name,input,market,calendar,today,fees,null);
+    }
+    /** 期初余额与后续委托统一重放；期初日不发布缺乏完整持有区间的日收益，也不伪造买入时间。 */
+    public static Calculation calculate(String code, String name, List<Order> input, Market market,
+                                        SimulationCalendar calendar, LocalDate today, Map<String,FeeSchedule> fees,
+                                        OpeningBalance opening) {
         List<Order> orders = input.stream().filter(o -> !o.status().equals("CANCELLED"))
                 .sorted(Comparator.comparing(Order::tradeDate).thenComparing(Order::createdAt).thenComparing(Order::orderId))
                 .toList();
-        if (orders.isEmpty()) return empty(code,name);
+        if (orders.isEmpty() && opening==null) return empty(code,name);
+        if(opening!=null && (!code.equals(opening.fundCode()) || opening.startDate().isAfter(today)
+                || orders.stream().anyMatch(o -> o.tradeDate().isBefore(opening.startDate()))))
+            throw invalid("交易早于期初持仓日期，需核对后再统计。");
         var navs = new TreeMap<LocalDate,Nav>();
         for (var nav : market.navs()) {
             if (!nav.navDate().isAfter(today) && (nav.announcedOn()==null || !nav.announcedOn().isAfter(today))) {
@@ -53,8 +62,18 @@ public final class SimulationAccounting {
                 }
             }
         }
-        LocalDate first = orders.get(0).tradeDate();
-        if (navs.isEmpty() || navs.lastKey().isBefore(first)) return pending(code,name,input);
+        LocalDate first = opening==null ? orders.get(0).tradeDate() : opening.startDate();
+        if(opening!=null && (!navs.containsKey(opening.navDate())
+                || navs.get(opening.navDate()).unitNav().compareTo(opening.unitNav())!=0))
+            throw invalid("期初参考净值缺失或已更正，保留已确认金额等待核对。");
+        if (navs.isEmpty() || navs.lastKey().isBefore(first)) {
+            if(opening!=null) {
+                if(orders.stream().anyMatch(o -> "CONFIRMED".equals(o.status())))
+                    throw invalid("已确认交易的净值缺失，保留上次估值等待核对。");
+                return opening(opening,input);
+            }
+            return pending(code,name,input);
+        }
         if (market.dividendsVerifiedAt()==null) throw invalid("分红资料尚未核验，暂不确认交易和收益。");
         if (market.dividendsVerifiedAt().atZone(SimulationCalendar.ZONE).toLocalDate().isBefore(navs.lastKey())) {
             throw invalid("分红核验日期早于最新净值，等待后台更新后结算。");
@@ -75,7 +94,7 @@ public final class SimulationAccounting {
                 blocked = true;
             }
         }
-        if (applied.isEmpty() || navs.isEmpty() || navs.lastKey().isBefore(first)) return pending(code,name,input);
+        if (applied.isEmpty() && opening==null) return pending(code,name,input);
         var dividends = canonicalDividends(market.dividends(),first,navs.lastKey());
         var lots = new ArrayDeque<Lot>();
         var executions = new ArrayList<Execution>();
@@ -85,13 +104,25 @@ public final class SimulationAccounting {
         var byDate = new HashMap<LocalDate,List<Order>>();
         applied.forEach(o -> byDate.computeIfAbsent(o.tradeDate(),d -> new ArrayList<>()).add(o));
         BigDecimal shares=ZERO,cost=ZERO,buy=ZERO,sell=ZERO,realized=ZERO,dividendGain=ZERO,previousGain=ZERO;
+        BigDecimal carriedGain=ZERO;
         LocalDate previousDate=null;
         Nav previousNav=navs.lowerEntry(first)==null ? null : navs.lowerEntry(first).getValue();
+        if(opening!=null) {
+            shares=opening.shares(); cost=opening.cost(); previousGain=opening.cumulativeGain();
+            // 既往累计收益可能同时包含已实现盈亏和分红，不能擅自归类为某一项。
+            carriedGain=opening.cumulativeGain().subtract(opening.marketValue().subtract(opening.cost()));
+            lots.add(new Lot(shares,cost,null,first));
+            previousDate=opening.navDate(); previousNav=navs.get(opening.navDate());
+            endShares.put(first,shares);
+            daily.add(new Daily(first,opening.marketValue(),opening.cumulativeGain(),null));
+        }
         for (var nav : navs.tailMap(first,true).values()) {
             LocalDate date=nav.navDate();
             BigDecimal dividendPerUnit=ZERO;
             for (var div : dividends) {
                 if (!date.equals(div.exDate())) continue;
+                // 期初及以前的收益已包含在确认余额中，不能再次派发。
+                if(opening!=null && !date.isAfter(first)) continue;
                 var entitlementDate = div.recordDate().equals(div.exDate()) ? div.recordDate().minusDays(1) : div.recordDate();
                 var historical = endShares.floorEntry(entitlementDate);
                 BigDecimal entitled=historical==null ? ZERO : historical.getValue();
@@ -144,8 +175,12 @@ public final class SimulationAccounting {
                         released=released.add(allocated);
                         if (v2) {
                             // 赎回费按批次持有自然天数分档，逐批计算后从赎回净额中扣减
-                            long days=ChronoUnit.DAYS.between(lot.confirmedOn,date);
-                            feeTotal=feeTotal.add(money(used.multiply(nav.unitNav()).multiply(redeemRate(fees.getOrDefault(code,new FeeSchedule(ZERO,List.of())),days))));
+                            FeeSchedule schedule=fees.getOrDefault(code,new FeeSchedule(ZERO,List.of()));
+                            // 期初持仓未提供真实购买日，使用已配置最高档作保守估算，不以录入日伪造持有期限。
+                            BigDecimal rate=lot.confirmedOn==null ? schedule.redeem().stream().map(FeeBand::rate)
+                                    .max(BigDecimal::compareTo).orElse(ZERO)
+                                    : redeemRate(schedule,ChronoUnit.DAYS.between(lot.confirmedOn,date));
+                            feeTotal=feeTotal.add(money(used.multiply(nav.unitNav()).multiply(rate)));
                         }
                         remaining=remaining.subtract(used); lot.shares=lot.shares.subtract(used); lot.cost=lot.cost.subtract(allocated);
                         if (lot.shares.signum()==0) lots.remove();
@@ -161,8 +196,12 @@ public final class SimulationAccounting {
                         v2 ? order.ruleVersion() : null));
             }
             BigDecimal value=precise(shares.multiply(nav.unitNav()));
-            BigDecimal total=value.subtract(cost).add(realized).add(dividendGain);
+            BigDecimal total=value.subtract(cost).add(realized).add(dividendGain).add(carriedGain);
             BigDecimal dayGain=(previousDate==null || calendar.next(previousDate).equals(date)) ? total.subtract(previousGain) : null;
+            if(opening!=null && date.equals(first)) {
+                dayGain=null;
+                daily.removeIf(d -> d.date().equals(date));
+            }
             daily.add(new Daily(date,value,total,dayGain));
             endShares.put(date,shares);
             previousGain=total; previousDate=date; previousNav=nav;
@@ -186,8 +225,10 @@ public final class SimulationAccounting {
         var position=new Position(code,name,shares,frozen,available,cost,latest.marketValue(),
                 latest.marketValue().subtract(cost),cost.signum()==0 ? null : latest.marketValue().subtract(cost).divide(cost,8,RoundingMode.HALF_UP),
                 realized,received,received.subtract(paid),paid,latest.cumulativeGain(),latest.dailyGain(),buy,sell,
-                last.unitNav(),last.navDate(),null);
-        if (position.cumulativeGain().subtract(position.marketValue().add(sell).add(received).subtract(buy)).abs()
+                last.unitNav(),last.navDate(),null,opening!=null,opening==null ? null : opening.startDate());
+        BigDecimal cashIdentity=position.marketValue().add(sell).add(received).subtract(buy);
+        if(opening!=null) cashIdentity=cashIdentity.subtract(opening.marketValue()).add(opening.cumulativeGain());
+        if (position.cumulativeGain().subtract(cashIdentity).abs()
                 .compareTo(new BigDecimal("0.00000001"))>0) throw invalid("账务核对未通过，停止发布估值。");
         return new Calculation(position,executions,daily,new ArrayList<>(entitlements.values()));
     }
@@ -214,7 +255,19 @@ public final class SimulationAccounting {
     }
     public static Calculation empty(String code,String name) {
         return new Calculation(new Position(code,name,ZERO,ZERO,ZERO,ZERO,ZERO,ZERO,null,ZERO,ZERO,ZERO,ZERO,
-                ZERO,null,ZERO,ZERO,null,null,null),List.of(),List.of(),List.of());
+                ZERO,null,ZERO,ZERO,null,null,null,false,null),List.of(),List.of(),List.of());
+    }
+    /** 已确认金额直接作为起点，份额只为后续价格变动和买卖服务，初始金额不因除法舍入而改写。 */
+    public static Calculation opening(OpeningBalance opening) { return opening(opening,List.of()); }
+    private static Calculation opening(OpeningBalance o,List<Order> input) {
+        BigDecimal frozen=input.stream().filter(p -> "PENDING".equals(p.status()) && "SELL".equals(p.side()))
+                .map(Order::shares).reduce(ZERO,BigDecimal::add);
+        if(frozen.compareTo(o.shares())>0) throw invalid("期初可用份额不足，停止结算。");
+        var gain=o.marketValue().subtract(o.cost());
+        var p=new Position(o.fundCode(),o.fundName(),o.shares(),frozen,o.shares(),o.cost(),o.marketValue(),gain,
+                o.cost().signum()==0 ? null : gain.divide(o.cost(),8,RoundingMode.HALF_UP),ZERO,ZERO,ZERO,ZERO,
+                o.cumulativeGain(),null,ZERO,ZERO,o.unitNav(),o.navDate(),null,true,o.startDate());
+        return new Calculation(p,List.of(),List.of(new Daily(o.startDate(),o.marketValue(),o.cumulativeGain(),null)),List.of());
     }
     private static Calculation pending(String code,String name,List<Order> input) {
         if (input.stream().anyMatch(o -> o.status().equals("CONFIRMED"))) throw invalid("净值或确认顺序暂不完整，保留上次结算。");

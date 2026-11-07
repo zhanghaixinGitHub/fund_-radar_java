@@ -44,6 +44,55 @@ class SimulationAccountingTests {
     }
     static void equal(String expected,BigDecimal actual) { assertNotNull(actual); assertEquals(0,num(expected).compareTo(actual),"expected="+expected+" actual="+actual); }
 
+    OpeningBalance openingBalance() {
+        return new OpeningBalance(UUID.randomUUID(),"000001","期初基金",date("2026-09-07"),date("2026-09-04"),
+                num("1"),num("1000"),num("1000"),num("1100"),num("-80"));
+    }
+    Calculation fromOpening(List<Order> orders,Market market,String today,Map<String,FeeSchedule> fees) {
+        return SimulationAccounting.calculate("000001","期初基金",orders,market,calendar(),date(today),fees,openingBalance());
+    }
+    @Test void openingBalancesPreserveAmountsAndDoNotInventBuyingHistoryOrFirstDayReturn() {
+        var result=fromOpening(List.of(),market(List.of(nav("2026-09-04","1")),List.of()),"2026-09-07",Map.of());
+        equal("1000",result.position().marketValue()); equal("-100",result.position().holdingGain());
+        equal("-80",result.position().cumulativeGain()); equal("0",result.position().totalBuy());
+        equal("1000",result.position().availableShares()); assertTrue(result.position().estimatedShares());
+        assertTrue(result.executions().isEmpty()); assertNull(result.position().dailyGain());
+        assertEquals(date("2026-09-07"),result.daily().get(0).date());
+    }
+    @Test void openingBalancesRevalueWithoutOrdersAndKeepHistoricalGainsOutOfDailyIncome() {
+        var result=fromOpening(List.of(),market(List.of(nav("2026-09-04","1"),nav("2026-09-07","1.1"),
+                nav("2026-09-08","1.2")),List.of()),"2026-09-08",Map.of());
+        equal("1200",result.position().marketValue()); equal("100",result.position().holdingGain());
+        equal("120",result.position().cumulativeGain()); equal("100",result.position().dailyGain());
+        assertNull(result.daily().get(0).dailyGain()); equal("0",result.position().realizedGain());
+    }
+    @Test void openingAndAddedLotsUseOneFifoLedgerAndFullSalePreservesCumulativeGain() {
+        var orders=List.of(order("BUY","110","2026-09-07"),order("SELL","1100","2026-09-08"));
+        var result=fromOpening(orders,market(List.of(nav("2026-09-04","1"),nav("2026-09-07","1.1"),
+                nav("2026-09-08","1.2")),List.of()),"2026-09-08",Map.of());
+        equal("0",result.position().shares()); equal("0",result.position().cost());
+        equal("110",result.position().totalBuy()); equal("1320",result.position().totalSell());
+        equal("130",result.position().cumulativeGain()); equal("110",result.position().dailyGain());
+        assertEquals(2,result.executions().size());
+    }
+    @Test void openingHoldingAgeIsUnknownSoRedemptionUsesHighestConfiguredRate() {
+        var fees=Map.of("000001",new FeeSchedule(num("0"),List.of(new FeeBand(0,6,num("0.015")),new FeeBand(7,null,num("0.005")))));
+        var result=fromOpening(List.of(order("SELL","500","2026-09-08")),market(List.of(nav("2026-09-04","1"),
+                nav("2026-09-07","1"),nav("2026-09-08","1")),List.of()),"2026-09-08",fees);
+        equal("7.50",result.executions().get(0).fee()); equal("-7.50",result.position().dailyGain());
+        equal("-87.50",result.position().cumulativeGain());
+    }
+    @Test void openingReferenceCorrectionsAndBackdatedOrdersAreRejectedInsteadOfChangingHistory() {
+        assertThrows(SimulationException.class,() -> fromOpening(List.of(),
+                market(List.of(nav("2026-09-04","1.01")),List.of()),"2026-09-07",Map.of()));
+        assertThrows(SimulationException.class,() -> fromOpening(List.of(order("BUY","10","2026-09-04")),
+                market(List.of(nav("2026-09-04","1")),List.of()),"2026-09-07",Map.of()));
+        assertThrows(SimulationException.class,() -> fromOpening(List.of(confirmed("BUY","10","2026-09-07")),
+                market(List.of(nav("2026-09-04","1")),List.of()),"2026-09-08",Map.of()));
+        var gap=fromOpening(List.of(),market(List.of(nav("2026-09-04","1"),nav("2026-09-08","1.2")),List.of()),"2026-09-08",Map.of());
+        assertNull(gap.position().dailyGain());
+    }
+
     @Test void buyAddPartialAndFullSellPreserveFifoAndRealizedGain() {
         var orders=new ArrayList<>(List.of(order("BUY","1000","2026-09-07"),order("BUY","110","2026-09-08"),order("SELL","500","2026-09-09")));
         var market=market(List.of(nav("2026-09-07","1"),nav("2026-09-08","1.1"),nav("2026-09-09","1.1"),nav("2026-09-10","1.1")),List.of());

@@ -65,13 +65,24 @@ class FundRatingTests {
         verify(service).startFundRatings(null);
     }
 
-    @Test void publicDtoOnlyAddsPublishedScoresToDetailAndDimensions() {
+    @Test void publicDtoKeepsPublishedScoresWithoutInternalCalculationFields() {
         for (Class<?> type : new Class<?>[]{FundRatingResponse.class, FundRatingResponse.Summary.class,
                 FundRatingResponse.Dimension.class, FundRatingResponse.Comparison.class})
             for (var component : type.getRecordComponents())
                 assertFalse(component.getName().matches("(?i).*(rawScore|weight|methodology|model|version).*"));
-        assertFalse(java.util.Arrays.stream(FundRatingResponse.Summary.class.getRecordComponents())
+        assertTrue(java.util.Arrays.stream(FundRatingResponse.Summary.class.getRecordComponents())
                 .anyMatch(c -> c.getName().equals("score")));
+    }
+
+    @Test void completeNumericSummaryDoesNotInventAnUnvalidatedGrade() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var summary = mapper.readValue("""
+                {"fundCode":"008888","status":"SCORED","score":"76.27","grade":null}
+                """, FundRatingResponse.Summary.class);
+        assertEquals("SCORED", summary.status());
+        assertEquals("76.27", summary.score());
+        assertNull(summary.grade());
+        assertNull(summary.partialScore());
     }
 
     @Test void jsonKeepsPublishedNumericScoresAndMissingScoresStayNull() throws Exception {

@@ -27,15 +27,21 @@ import java.util.List;
 @Service
 public class AiFundClient {
 
+    /** 仅读取已核验公共份额；复用内部令牌、超时和请求追踪，不从浏览器接受来源地址。 */
+    public com.fundradar.core.fund.api.FundShareClassesResponse getFundShareClasses(String code) {
+        return readMaterials(builder -> builder.path("/internal/v1/funds/{code}/share-classes").build(code),
+                com.fundradar.core.fund.api.FundShareClassesResponse.class);
+    }
+
     /** 一次批量读取已发布评级，服务间令牌只留在 Java 与 Python 之间。 */
     public com.fundradar.core.fund.api.FundRatingResponse.Batch getFundRatings(String codes) {
-        return readMaterials(builder -> builder.path("/internal/v1/funds/ratings")
+        return readMaterials(ratingRestClient, builder -> builder.path("/internal/v1/funds/ratings")
                 .queryParam("fundCodes", "{codes}").build(java.util.Map.of("codes", codes)),
                 com.fundradar.core.fund.api.FundRatingResponse.Batch.class);
     }
 
     public com.fundradar.core.fund.api.FundRatingResponse getFundRating(String code, String reference) {
-        return readMaterials(builder -> {
+        return readMaterials(ratingRestClient, builder -> {
             builder.path("/internal/v1/funds/{code}/rating");
             if (reference != null) builder.queryParam("ratingRef", reference);
             return builder.build(code);
@@ -85,8 +91,12 @@ public class AiFundClient {
     }
 
     private <T> T readMaterials(java.util.function.Function<UriBuilder, URI> uri, Class<T> type) {
+        return readMaterials(restClient, uri, type);
+    }
+
+    private <T> T readMaterials(RestClient client, java.util.function.Function<UriBuilder, URI> uri, Class<T> type) {
         try {
-            T value = restClient.get().uri(uri).header(SERVICE_TOKEN_HEADER, properties.getToken())
+            T value = client.get().uri(uri).header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId()).retrieve().body(type);
             if (value == null) throw new AiServiceUnavailableException("Empty fund materials", null);
             return value;
@@ -108,6 +118,8 @@ public class AiFundClient {
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
 
     private final RestClient restClient;
+    /** 评分会核验原件；当前59只筛选和冷启动编译可能超过普通3秒，独立保留60秒有界读取。 */
+    private final RestClient ratingRestClient;
     private final AiServiceProperties properties;
 
     public AiFundClient(RestClient.Builder restClientBuilder, AiServiceProperties properties) {
@@ -115,6 +127,11 @@ public class AiFundClient {
         this.restClient = restClientBuilder
                 .baseUrl(properties.getBaseUrl())
                 .requestFactory(createRequestFactory(properties.getReadTimeout()))
+                .build();
+        Duration ratingTimeout = properties.getReadTimeout().compareTo(Duration.ofSeconds(60)) > 0
+                ? properties.getReadTimeout() : Duration.ofSeconds(60);
+        this.ratingRestClient = restClient.mutate()
+                .requestFactory(createRequestFactory(ratingTimeout))
                 .build();
     }
 
@@ -130,7 +147,10 @@ public class AiFundClient {
     /** 评级由 Python 核验并在分页前筛选；只透传白名单参数，不在 Java 重新评分。 */
     public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page, String rating) {
         try {
-            AiFundPage payload = restClient.get()
+            // 含评分筛选的列表在Python分页前核验完整市场，须复用评分专用
+            // 等待预算；普通列表继续使用原短超时，不扩大其他资料接口等待。
+            RestClient queryClient = StringUtils.hasText(rating) ? ratingRestClient : restClient;
+            AiFundPage payload = queryClient.get()
                     .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page, rating))
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())

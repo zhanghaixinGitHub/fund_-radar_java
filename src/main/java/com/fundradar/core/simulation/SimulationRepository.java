@@ -81,7 +81,7 @@ public class SimulationRepository {
                 .param("id",o.orderId()).param("user",o.userId()).update();
         ledger(o.userId(),o.fundCode(),"cancel:"+o.orderId(),"ORDER_CANCELLED",Map.of("orderId",o.orderId()),now);
         db.sql("""
-            DELETE FROM sim_position p WHERE p.user_id=:user AND p.fund_code=:code
+            DELETE FROM sim_position p WHERE p.user_id=:user AND p.fund_code=:code AND p.opening_balance IS NULL
             AND NOT EXISTS (SELECT 1 FROM sim_order o WHERE o.user_id=p.user_id AND o.fund_code=p.fund_code AND o.status<>'CANCELLED')
             """).param("user",o.userId()).param("code",o.fundCode()).update();
     }
@@ -108,12 +108,69 @@ public class SimulationRepository {
         return db.sql("SELECT snapshot,issue FROM sim_position WHERE user_id=:user ORDER BY fund_code").param("user",user)
                 .query((r,n) -> withState(decode(r.getString(1),Position.class),frozen,r.getString(2))).list();
     }
+    /**
+     * 补齐本人最近一次确认的持仓名单中尚无模拟记录的基金。
+     * 只读取最新快照，且要求仍在本人关注中；旧快照、其他用户和已取消关注的基金不能混入。
+     * 不读取历史截图金额，不创建持仓、订单或收益，也不参与模拟资产汇总。
+     */
+    public List<HoldingReference> unrecordedHoldings(UUID user) {
+        return db.sql("""
+            SELECT h.fund_code,h.fund_name FROM portfolio_holding_snapshot h
+            WHERE h.snapshot_id=(
+                SELECT s.snapshot_id FROM portfolio_snapshot s
+                WHERE s.user_id=:user AND s.source_kind='USER_CONFIRMED_SCREENSHOT'
+                ORDER BY s.imported_at DESC,s.snapshot_id DESC LIMIT 1
+            )
+            AND EXISTS (SELECT 1 FROM watchlist_item w WHERE w.user_id=:user AND w.fund_code=h.fund_code)
+            AND NOT EXISTS (SELECT 1 FROM sim_position p WHERE p.user_id=:user AND p.fund_code=h.fund_code)
+            ORDER BY h.fund_code
+            """).param("user",user).query((r,n) -> new HoldingReference(r.getString(1),r.getString(2))).list();
+    }
+    /** 只读取本人账户显式采用的截图，不把旧快照或其他用户资料自动变成当前余额。 */
+    public ConfirmedBaseline confirmedBaseline(UUID user) {
+        var header=db.sql("""
+            SELECT s.snapshot_id,s.data_as_of_date,s.imported_at FROM sim_account a
+            JOIN portfolio_snapshot s ON s.snapshot_id=a.baseline_snapshot_id AND s.user_id=a.user_id
+            WHERE a.user_id=:user
+            """).param("user",user).query((r,n) -> new ConfirmedBaseline(r.getObject(1,UUID.class),
+                r.getObject(2,LocalDate.class),r.getTimestamp(3).toInstant(),List.of())).optional().orElse(null);
+        if(header==null) return null;
+        var holdings=db.sql("""
+            SELECT h.* FROM portfolio_holding_snapshot h WHERE h.snapshot_id=:id
+            AND NOT EXISTS (SELECT 1 FROM sim_position p WHERE p.user_id=:user AND p.fund_code=h.fund_code
+                AND p.opening_balance->>'snapshotId'=CAST(:id AS text))
+            ORDER BY h.reported_amount DESC,h.fund_code
+            """).param("id",header.snapshotId()).param("user",user).query((r,n) -> new ConfirmedHolding(r.getString("fund_code"),r.getString("fund_name"),
+                r.getBigDecimal("reported_amount"),r.getBigDecimal("reported_weight_pct"),r.getBigDecimal("reported_daily_gain_amount"),
+                r.getBigDecimal("reported_holding_gain_amount"),r.getBigDecimal("reported_holding_gain_pct"),
+                r.getBigDecimal("reported_cumulative_gain_amount"))).list();
+        return holdings.isEmpty() ? null : new ConfirmedBaseline(header.snapshotId(),header.dataAsOfDate(),header.recordedAt(),holdings);
+    }
+    /** 只读取本人可重放的期初余额；后续结算更新估值投影时保留该起点不变。 */
+    public Map<String,OpeningBalance> openingBalances(UUID user) {
+        var result=new LinkedHashMap<String,OpeningBalance>();
+        db.sql("SELECT fund_code,opening_balance FROM sim_position WHERE user_id=:user AND opening_balance IS NOT NULL")
+                .param("user",user).query((r,n) -> { result.put(r.getString(1),decode(r.getString(2),OpeningBalance.class)); return 0; }).list();
+        return result;
+    }
+    /** 调用方必须先锁住本人 sim_account；幂等保存，不覆盖已经采用的期初数据。 */
+    public void saveOpeningBalance(UUID user,OpeningBalance opening,java.time.Instant now) {
+        var initial=SimulationAccounting.opening(opening).position();
+        db.sql("""
+            INSERT INTO sim_position(user_id,fund_code,snapshot,opening_balance,updated_at)
+            VALUES(:user,:code,CAST(:position AS jsonb),CAST(:opening AS jsonb),:now)
+            ON CONFLICT(user_id,fund_code) DO UPDATE SET opening_balance=EXCLUDED.opening_balance
+            WHERE sim_position.opening_balance IS NULL
+            """).param("user",user).param("code",opening.fundCode()).param("position",encode(initial))
+                .param("opening",encode(opening)).param("now",ts(now)).update();
+    }
     private Position withState(Position p,Map<String,BigDecimal> frozen,String issue) {
         BigDecimal f=frozen.getOrDefault(p.fundCode(),SimulationAccounting.ZERO);
         // 结算快照的可用份额已排除未到可用日的批次；此处再扣掉快照之后新下的待确认卖出冻结。
         return new Position(p.fundCode(),p.fundName(),p.shares(),f,issue==null ? p.availableShares().subtract(f).max(BigDecimal.ZERO) : BigDecimal.ZERO,
                 p.cost(),p.marketValue(),p.holdingGain(),p.holdingGainRate(),p.realizedGain(),p.dividendGain(),p.receivableDividend(),
-                p.paidDividend(),p.cumulativeGain(),p.dailyGain(),p.totalBuy(),p.totalSell(),p.unitNav(),p.navDate(),issue);
+                p.paidDividend(),p.cumulativeGain(),p.dailyGain(),p.totalBuy(),p.totalSell(),p.unitNav(),p.navDate(),issue,
+                p.estimatedShares(),p.openingDate());
     }
     /** 加载当前生效的模拟费率规则；只取生效区间覆盖今天的记录，同一基金申购费率取最新生效的一条。 */
     public Map<String,FeeSchedule> loadFees() {
@@ -292,7 +349,10 @@ public class SimulationRepository {
             """+filter+" GROUP BY fund_code UNION ALL "+"""
               SELECT fund_code,min(valuation_date),max(valuation_date),NULL::text
               FROM sim_daily_valuation WHERE user_id=:user
-            """+filter+" GROUP BY fund_code), funds AS ("+"""
+            """+filter+" GROUP BY fund_code UNION ALL "+"""
+              SELECT fund_code,(opening_balance->>'startDate')::date,NULL::date,opening_balance->>'fundName'
+              FROM sim_position WHERE user_id=:user AND opening_balance IS NOT NULL
+            """+filter+"), funds AS ("+"""
               SELECT fund_code,min(first_date) AS first_date,max(last_date) AS last_date,max(fund_name) AS fund_name
               FROM history GROUP BY fund_code)
             SELECT f.*,p.snapshot,p.issue FROM funds f LEFT JOIN sim_position p
@@ -304,7 +364,7 @@ public class SimulationRepository {
             return new SimulationEarnings.Fund(r.getString("fund_code"),p!=null ? p.fundName() :
                     Objects.requireNonNullElse(r.getString("fund_name"),r.getString("fund_code")),
                     r.getObject("first_date",LocalDate.class),r.getObject("last_date",LocalDate.class),
-                    p!=null && p.shares().signum()==0 && p.totalBuy().signum()>0,
+                    p!=null && p.shares().signum()==0 && (p.totalBuy().signum()>0 || p.estimatedShares()),
                     p==null ? null : p.marketValue(),p==null ? null : p.navDate(),r.getString("issue")!=null);
         }).list();
     }
@@ -359,8 +419,8 @@ public class SimulationRepository {
     }
     private String planSelect() {
         return """
-            SELECT p.*, (SELECT count(*) FROM sim_plan_execution e WHERE e.plan_id=p.plan_id AND e.status='ORDERED') AS ordered_periods,
-                (SELECT COALESCE(sum(o.amount),0) FROM sim_plan_execution e JOIN sim_order o ON o.order_id=e.order_id
+            SELECT p.*, p.reported_ordered_periods+(SELECT count(*) FROM sim_plan_execution e WHERE e.plan_id=p.plan_id AND e.status='ORDERED') AS ordered_periods,
+                p.reported_invested_amount+(SELECT COALESCE(sum(o.amount),0) FROM sim_plan_execution e JOIN sim_order o ON o.order_id=e.order_id
                  WHERE e.plan_id=p.plan_id AND o.status='CONFIRMED') AS invested_amount FROM sim_plan p
             """;
     }
@@ -409,6 +469,8 @@ public class SimulationRepository {
             SELECT fund_code,min(first_date) FROM (
                 SELECT fund_code,min(trade_date) AS first_date FROM sim_order WHERE status<>'CANCELLED' GROUP BY fund_code
                 UNION ALL SELECT fund_code,min(start_date) FROM sim_plan WHERE status IN ('ACTIVE','PAUSED') GROUP BY fund_code
+                UNION ALL SELECT fund_code,min((opening_balance->>'navDate')::date)
+                  FROM sim_position WHERE opening_balance IS NOT NULL GROUP BY fund_code
             ) x GROUP BY fund_code ORDER BY fund_code
             """).query((r,n) -> { result.put(r.getString(1),r.getObject(2,LocalDate.class)); return 0; }).list();
         return result;
@@ -424,6 +486,8 @@ public class SimulationRepository {
               (SELECT string_agg(concat_ws(':',plan_id,version,status,scheduled_date,execution_date),
                   '|' ORDER BY plan_id) FROM sim_plan),
               (SELECT string_agg(concat_ws(':',rule_id,version,updated_at),'|' ORDER BY rule_id) FROM sim_fee_rule),
+              (SELECT string_agg(concat_ws(':',user_id,fund_code,opening_balance::text),'|' ORDER BY user_id,fund_code)
+                  FROM sim_position WHERE opening_balance IS NOT NULL),
               (SELECT string_agg(concat_ws(':',user_id,fund_code,issue),'|' ORDER BY user_id,fund_code)
                   FROM sim_position WHERE issue IS NOT NULL),
               (SELECT string_agg(concat_ws(':',a.user_id,u.status),'|' ORDER BY a.user_id)

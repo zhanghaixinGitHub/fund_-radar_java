@@ -6,3 +6,4 @@ target/
 portfolio-snapshot.local.json
 portfolio-snapshot.local.json.bak
 /.local-runs/
+/.m2/

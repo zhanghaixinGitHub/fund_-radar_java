@@ -4,10 +4,10 @@ Java 服务是前端唯一业务接口与审计边界。它提供健康检查、
 
 ## JDK
 
-本机默认 JDK 为 8；本项目使用 `C:\ideaProject\workSpace12\.tools\jdk17\jdk-17.0.20.1+1` 中的 JDK 17。
+本机默认 JDK 为 8；本项目使用 `D:\Project-FullStack\workSpace01\02-java\.tools\jdk17\jdk-17.0.20.1+1` 中的 JDK 17。
 
 ```powershell
-$env:JAVA_HOME = 'C:\ideaProject\workSpace12\.tools\jdk17\jdk-17.0.20.1+1'
+$env:JAVA_HOME = 'D:\Project-FullStack\workSpace01\02-java\.tools\jdk17\jdk-17.0.20.1+1'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 mvn test
 mvn spring-boot:run
