@@ -8,21 +8,21 @@ public record FundRatingResponse(
         String validUntil, String ratingRef, String message, String summary, String score,
         Comparison comparison, List<Dimension> dimensions, List<Point> strengths, List<Point> weaknesses,
         Dates dataDates, List<String> limitations, Summary previousRating,
-        ScoreRange scoreRange, String partialScore, Coverage scoreCoverage) {
+        ScoreRange scoreRange, String partialScore, Coverage scoreCoverage, String incompleteReviewedOn) {
     public record Summary(String fundCode, String status, String grade, String gradeLabel,
             String asOfDate, String validUntil, String ratingRef, String message,
-            ScoreRange scoreRange, String partialScore, Coverage scoreCoverage, String score) {
+            ScoreRange scoreRange, String partialScore, Coverage scoreCoverage, String score, String incompleteReviewedOn) {
         /** 原有部分评分构造保持兼容；完整数字分仅由Python正式批次提供。 */
         public Summary(String fundCode, String status, String grade, String gradeLabel,
                 String asOfDate, String validUntil, String ratingRef, String message,
                 ScoreRange scoreRange, String partialScore, Coverage scoreCoverage) {
             this(fundCode, status, grade, gradeLabel, asOfDate, validUntil, ratingRef, message,
-                    scoreRange, partialScore, scoreCoverage, null);
+                    scoreRange, partialScore, scoreCoverage, null, null);
         }
         /** 保留既有完整评分摘要调用；新增部分结果只由Python同批次数据提供。 */
         public Summary(String fundCode, String status, String grade, String gradeLabel,
                 String asOfDate, String validUntil, String ratingRef, String message) {
-            this(fundCode, status, grade, gradeLabel, asOfDate, validUntil, ratingRef, message, null, null, null, null);
+            this(fundCode, status, grade, gradeLabel, asOfDate, validUntil, ratingRef, message, null, null, null, null, null);
         }
     }
     /** 已发布分数范围，未取中点；Java不再推算单点或等级。 */

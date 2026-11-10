@@ -102,6 +102,7 @@ class FundRatingTests {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         var detail = mapper.readValue("""
                 {"fundCode":"000009","status":"PARTIAL","score":null,"grade":null,
+                 "incompleteReviewedOn":"2026-11-10",
                  "scoreRange":{"lower":"65.57","upper":"67.37"},"partialScore":"67.11",
                  "scoreCoverage":{"pointWeight":"65","intervalWeight":"35","missingWeight":"0",
                                   "pointDimensions":5,"intervalDimensions":3},
@@ -111,6 +112,7 @@ class FundRatingTests {
         assertEquals("PARTIAL", detail.status());
         assertNull(detail.score());
         assertNull(detail.grade());
+        assertEquals("2026-11-10", detail.incompleteReviewedOn());
         assertEquals("65.57", detail.scoreRange().lower());
         assertEquals("65", detail.scoreCoverage().pointWeight());
         assertEquals("59.61", detail.dimensions().get(0).scoreRange().lower());
