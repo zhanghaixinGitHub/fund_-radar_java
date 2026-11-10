@@ -118,7 +118,7 @@ public class AiFundClient {
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
 
     private final RestClient restClient;
-    /** 评分会核验原件；当前59只筛选和冷启动编译可能超过普通3秒，独立保留60秒有界读取。 */
+    /** 评级筛选需在分页前读取完整市场，独立保留60秒有界读取。 */
     private final RestClient ratingRestClient;
     private final AiServiceProperties properties;
 
