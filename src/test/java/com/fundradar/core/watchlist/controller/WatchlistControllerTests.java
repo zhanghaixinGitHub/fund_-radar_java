@@ -37,12 +37,12 @@ class WatchlistControllerTests {
     void forwardsSearchOnlyAfterCurrentUserPermissionCheck() {
         var service = mock(WatchlistService.class);
         var controller = new WatchlistController(service, mock(FundQueryService.class));
-        assertThrows(RuntimeException.class, () -> controller.listWatchlist("指数", null, 1, 10));
+        assertThrows(RuntimeException.class, () -> controller.listWatchlist("指数", null, 1, 10, false));
         verifyNoInteractions(service);
         CurrentUserContext.set(currentUser());
         try {
-            controller.listWatchlist("指数", "INDEX", 2, 10);
-            verify(service).listCurrentUserItems("指数", "INDEX", 2, 10);
+            controller.listWatchlist("指数", "INDEX", 2, 10, true);
+            verify(service).listCurrentUserItems("指数", "INDEX", 2, 10, true);
         } finally {
             CurrentUserContext.clear();
         }
@@ -51,11 +51,13 @@ class WatchlistControllerTests {
     @Test
     void searchKeywordHasSameLengthLimitAsMarket() throws Exception {
         var controller = new WatchlistController(mock(WatchlistService.class), mock(FundQueryService.class));
-        var method = WatchlistController.class.getMethod("listWatchlist", String.class, String.class, int.class, int.class);
+        var method = WatchlistController.class.getMethod(
+                "listWatchlist", String.class, String.class, int.class, int.class, boolean.class
+        );
         try (var factory = Validation.buildDefaultValidatorFactory()) {
             var validator = factory.getValidator().forExecutables();
-            assertTrue(validator.validateParameters(controller, method, new Object[]{"基".repeat(50), null, 1, 10}).isEmpty());
-            assertFalse(validator.validateParameters(controller, method, new Object[]{"基".repeat(51), null, 1, 10}).isEmpty());
+            assertTrue(validator.validateParameters(controller, method, new Object[]{"基".repeat(50), null, 1, 10, false}).isEmpty());
+            assertFalse(validator.validateParameters(controller, method, new Object[]{"基".repeat(51), null, 1, 10, false}).isEmpty());
         }
     }
 
@@ -158,8 +160,15 @@ class WatchlistControllerTests {
         }
 
         @Override
-        public WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize) {
+        public WatchlistPageResponse listCurrentUserItems(
+                String keyword, String fundType, int page, int pageSize, boolean heldOnly
+        ) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<String> findCurrentUserFollowedFundCodes() {
+            return followedCodes;
         }
 
         @Override
@@ -194,6 +203,12 @@ class WatchlistControllerTests {
         @Override
         public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor,
                                           Integer page, String rating) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor,
+                                          Integer page, String rating, Collection<String> fundCodes) {
             throw new UnsupportedOperationException();
         }
 

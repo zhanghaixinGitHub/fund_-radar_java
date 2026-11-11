@@ -60,10 +60,11 @@ public class WatchlistController {
             @org.springframework.web.bind.annotation.RequestParam(defaultValue = "1")
             @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(10_000) int page,
             @org.springframework.web.bind.annotation.RequestParam(defaultValue = "10")
-            @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(50) int pageSize
+            @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(50) int pageSize,
+            @RequestParam(defaultValue = "false") boolean heldOnly
     ) {
         CurrentUserContext.requirePermission(PermissionCode.WATCHLIST_SELF_READ);
-        return ApiResponse.success(watchlistService.listCurrentUserItems(keyword, fundType, page, pageSize));
+        return ApiResponse.success(watchlistService.listCurrentUserItems(keyword, fundType, page, pageSize, heldOnly));
     }
 
     /**

@@ -28,6 +28,31 @@ public class MultiPredictionService {
         if(!scope.follows(user,code)) throw new NoSuchElementException("本人未关注该基金");
     }
     public JsonNode current(String code) { UUID user=user(false); owns(user,code); return currentFor(user,code); }
+
+    /** 每日任务只归档指定的本期预测；模拟持仓在保存前后重新核实，不依赖关注列表。 */
+    @org.springframework.transaction.annotation.Transactional
+    public Map<String,Object> archiveHeld(UUID owner,String code,UUID id,java.time.LocalDate target) {
+        if(!scope.predictionEligible(owner,code) || !scope.holds(owner,code))
+            throw new NoSuchElementException("本人当前没有该基金持仓");
+        JsonNode selected=null;
+        for(var prediction:client.get("/funds/"+code).path("predictions")) {
+            if(!id.toString().equals(prediction.path("predictionId").asText())) continue;
+            if(selected!=null) throw new IllegalStateException("DUPLICATE_PUBLIC_RESULT");
+            selected=prediction;
+        }
+        if(selected==null || !code.equals(selected.path("fundCode").asText())
+                || !target.toString().equals(selected.path("startDate").asText())
+                || !"COMPREHENSIVE".equals(selected.path("generationMethod").asText()))
+            throw new IllegalArgumentException("CURRENT_PREDICTION_IDENTITY_OR_DATE_MISMATCH");
+        link(owner,code,selected);
+        String saved=db.sql("SELECT payload::text FROM prediction_user_link WHERE user_id=:u AND fund_code=:c AND prediction_id=:id")
+                .param("u",owner).param("c",code).param("id",id).query(String.class).single();
+        try {
+            if(!json.readTree(saved).equals(selected)) throw new IllegalStateException("OWNER_PAYLOAD_MISMATCH");
+        } catch(java.io.IOException error) { throw new IllegalStateException("OWNER_PAYLOAD_INVALID"); }
+        if(!scope.holds(owner,code)) throw new IllegalStateException("OWNER_REMOVED_DURING_ARCHIVE");
+        return Map.of("owner",owner.toString(),"code",code,"predictionId",id.toString(),"targetDate",target.toString(),"verified",true);
+    }
     public JsonNode currentFor(UUID user,String code) {
         owns(user,code);
         var value=client.get("/funds/"+code);

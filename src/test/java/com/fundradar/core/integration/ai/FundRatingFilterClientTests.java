@@ -35,11 +35,13 @@ class FundRatingFilterClientTests {
             properties.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
             properties.setToken("offline-test-token");
             var client = new AiFundClient(RestClient.builder(), properties);
-            var result = client.listFunds("华夏", "MIXED", 10, null, 2, "GOOD");
+            var result = client.listFunds("华夏", "MIXED", 10, null, 2, "GOOD", java.util.List.of("002112", "001021"));
             assertEquals("GOOD", result.ratings().get("002112").grade());
             assertEquals(11, result.totalCount());
             assertTrue(requests.get(0).get("query").contains("rating=GOOD"));
             assertTrue(requests.get(0).get("query").contains("keyword=华夏"));
+            assertTrue(requests.get(0).get("query").contains("fundCode=002112"));
+            assertTrue(requests.get(0).get("query").contains("fundCode=001021"));
             assertEquals("offline-test-token", requests.get(0).get("token"));
             assertFalse(requests.get(0).get("query").contains("token"));
         } finally {

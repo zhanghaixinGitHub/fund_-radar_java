@@ -38,6 +38,14 @@ public class InternalDirection1dSyncController {
     @GetMapping("/window")
     public Map<String,Object> window(HttpServletRequest request) { authenticate(request); return batch.window(); }
 
+    @GetMapping("/users/{owner}/held-fund-codes")
+    public List<String> heldFundCodes(HttpServletRequest request,@PathVariable UUID owner,
+            @RequestParam(defaultValue="") String after) {
+        authenticate(request);
+        if(!after.isEmpty() && !after.matches("[0-9]{6}")) throw new IllegalArgumentException("INVALID_CURSOR");
+        return batch.heldFundCodes(after,owner);
+    }
+
     @PostMapping("/{code}")
     public Map<String,Object> generate(HttpServletRequest request,@PathVariable String code,@RequestBody Map<String,String> body) {
         authenticate(request);

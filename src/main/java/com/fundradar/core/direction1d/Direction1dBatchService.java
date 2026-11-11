@@ -20,6 +20,8 @@ public class Direction1dBatchService {
 
     public List<String> fundCodes(String after,UUID owner) { return repo.predictionFundCodes(after,owner); }
 
+    public List<String> heldFundCodes(String after,UUID owner) { return repo.heldFundCodes(after,owner); }
+
     /** 只为触发账号登记预测；即使同步过程中取消关注或停用，也不能继续关联结果。 */
     public Map<String,Object> generateForUser(String code,LocalDate target,UUID owner) {
         if(code==null || !code.matches("[0-9]{6}") || target==null || owner==null)

@@ -57,7 +57,7 @@ public final class Direction1dPolicy {
                 throw new IllegalArgumentException("INVALID_GENERATION_POLICY");
             boolean navReady="CN_NAV_READY_CLOSE_V1".equals(generation);
             if(!open.equals(t.atTime(navReady?15:18,0).atZone(ZONE).toInstant()) || !deadline.equals(u.atTime(navReady?15:8,navReady?0:30).atZone(ZONE).toInstant())
-                    || !u.equals(Direction1dCalendar.next(t)) || !p.path("calendar_version").asText().equals(Direction1dCalendar.VERSION)
+                    || !u.equals(Direction1dCalendar.next(t,p.path("calendar_version").asText()))
                     || !p.path("latest_nav_date").asText().equals(t.toString())
                     || generated.isBefore(open) || !generated.isBefore(deadline) || generated.isAfter(now.plusSeconds(5)))
                 throw new IllegalArgumentException("INVALID_WINDOW");
@@ -68,7 +68,7 @@ public final class Direction1dPolicy {
                     || instant(input,"feature_as_of").isAfter(generated)
                     || instant(input,"max_input_observed_at").isAfter(instant(input,"feature_as_of")))
                 throw new IllegalArgumentException("INVALID_INPUT");
-            var expectedDays=Direction1dCalendar.inputs(t);int position=0;
+            var expectedDays=Direction1dCalendar.inputs(t,p.path("calendar_version").asText());int position=0;
             for(JsonNode value:input.path("values")) {
                 if(!value.path("nav_date").asText().equals(expectedDays.get(position++).toString())
                         || new java.math.BigDecimal(value.path("unit_nav").asText()).signum()<=0

@@ -16,6 +16,7 @@ import com.fundradar.core.fund.service.FundEventQueryService;
 import com.fundradar.core.fund.service.FundAnalysisSummaryQueryService;
 import com.fundradar.core.fund.service.FundFeatureStatusQueryService;
 import com.fundradar.core.fund.service.FundQueryService;
+import com.fundradar.core.fund.service.FundPersonalScopeService;
 import com.fundradar.core.fund.service.FundSignalQueryService;
 import com.fundradar.core.watchlist.service.WatchlistService;
 import jakarta.validation.constraints.Max;
@@ -56,6 +57,7 @@ public class FundController {
     private final FundFeatureStatusQueryService fundFeatureStatusQueryService;
     private final FundSignalQueryService fundSignalQueryService;
     private final WatchlistService watchlistService;
+    private final FundPersonalScopeService fundPersonalScopeService;
 
     public FundController(
             FundQueryService fundQueryService,
@@ -63,7 +65,8 @@ public class FundController {
             FundAnalysisSummaryQueryService fundAnalysisSummaryQueryService,
             FundFeatureStatusQueryService fundFeatureStatusQueryService,
             FundSignalQueryService fundSignalQueryService,
-            WatchlistService watchlistService
+            WatchlistService watchlistService,
+            FundPersonalScopeService fundPersonalScopeService
     ) {
         this.fundQueryService = fundQueryService;
         this.fundEventQueryService = fundEventQueryService;
@@ -71,6 +74,7 @@ public class FundController {
         this.fundFeatureStatusQueryService = fundFeatureStatusQueryService;
         this.fundSignalQueryService = fundSignalQueryService;
         this.watchlistService = watchlistService;
+        this.fundPersonalScopeService = fundPersonalScopeService;
     }
 
     /**
@@ -100,18 +104,26 @@ public class FundController {
             @RequestParam(required = false) @jakarta.validation.constraints.Pattern(
                     regexp = "^(EXCELLENT|GOOD|AVERAGE|WEAK|SCORED|UNRATED|PENDING)$",
                     message = "基金评级筛选参数无效。"
-            ) String rating
+            ) String rating,
+            @RequestParam(defaultValue = "false") boolean watchedOnly,
+            @RequestParam(defaultValue = "false") boolean heldOnly
     ) {
         CurrentUserContext.requirePermission(PermissionCode.FUND_READ);
         String normalizedCursor = cursor == null || cursor.isBlank() ? null : cursor;
         if (page != null && normalizedCursor != null) {
             throw new IllegalArgumentException("page 与 cursor 不能同时使用。");
         }
+        FundPageResponse response;
+        if (watchedOnly || heldOnly) {
+            response = fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page, rating,
+                    fundPersonalScopeService.findFundCodes(watchedOnly, heldOnly));
+        } else {
+            response = rating == null ? fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
+                    : fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page, rating);
+        }
         // 列表包含当前评级与本人关注状态，禁止浏览器或中间缓存继续复用撤回前的结果。
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(ApiResponse.success(withWatchStatus(
-                rating == null ? fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page)
-                        : fundQueryService.listFunds(keyword, fundType, pageSize, normalizedCursor, page, rating)
-        )));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(ApiResponse.success(withWatchStatus(response)));
     }
 
     /**

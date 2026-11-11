@@ -101,6 +101,13 @@ public class SimulationRepository {
         if (code!=null) { query.param("code",code); count.param("code",code); }
         return new Page<>(query.query(orderMapper()).list(),page,size,count.query(Long.class).single());
     }
+    /** 只取当前仍有模拟份额的基金；已清仓和仅有待确认订单的记录不算持仓。 */
+    public Set<String> heldFundCodes(UUID user) {
+        return Set.copyOf(db.sql("""
+            SELECT fund_code FROM sim_position
+            WHERE user_id=:user AND (snapshot->>'shares')::numeric>0
+            """).param("user",user).query(String.class).list());
+    }
     public List<Position> positions(UUID user) {
         var frozen=new HashMap<String,BigDecimal>();
         db.sql("SELECT fund_code,sum(shares) AS frozen FROM sim_order WHERE user_id=:user AND side='SELL' AND status='PENDING' GROUP BY fund_code")

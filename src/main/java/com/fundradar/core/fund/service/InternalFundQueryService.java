@@ -32,6 +32,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -90,6 +92,23 @@ public class InternalFundQueryService implements FundQueryService {
                                       Integer page, String rating) {
         if (rating == null) return listFunds(keyword, fundType, pageSize, cursor, page);
         AiFundPage result = aiFundClient.listFunds(keyword, fundType, pageSize, cursor, page, rating);
+        if (result.ratings() == null || result.items().stream()
+                .anyMatch(item -> !result.ratings().containsKey(item.fundCode())
+                        || result.ratings().get(item.fundCode()) == null)) {
+            throw new AiServiceUnavailableException("评级筛选暂不可用，请稍后重试。", null);
+        }
+        return withRatings(toPageResponse(result), result.ratings());
+    }
+
+    @Override
+    /** 个人化筛选不读写公共分页缓存，避免不同账号或关注变化共用旧范围。 */
+    public FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor,
+                                      Integer page, String rating, Collection<String> fundCodes) {
+        if (fundCodes.isEmpty()) {
+            return new FundPageResponse(List.of(), null, page, pageSize, 0, 0, false, null);
+        }
+        AiFundPage result = aiFundClient.listFunds(keyword, fundType, pageSize, cursor, page, rating, fundCodes);
+        if (rating == null) return withCurrentRatings(toPageResponse(result));
         if (result.ratings() == null || result.items().stream()
                 .anyMatch(item -> !result.ratings().containsKey(item.fundCode())
                         || result.ratings().get(item.fundCode()) == null)) {

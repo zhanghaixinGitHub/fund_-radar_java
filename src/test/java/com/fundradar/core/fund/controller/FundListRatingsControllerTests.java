@@ -18,9 +18,10 @@ import static org.mockito.Mockito.*;
 class FundListRatingsControllerTests {
     private final FundQueryService service = mock(FundQueryService.class);
     private final WatchlistService watchlist = mock(WatchlistService.class);
+    private final FundPersonalScopeService personalScope = mock(FundPersonalScopeService.class);
     private final FundController controller = new FundController(service, mock(FundEventQueryService.class),
             mock(FundAnalysisSummaryQueryService.class), mock(FundFeatureStatusQueryService.class),
-            mock(FundSignalQueryService.class), watchlist);
+            mock(FundSignalQueryService.class), watchlist, personalScope);
 
     @AfterEach void clear() { CurrentUserContext.clear(); }
 
@@ -30,10 +31,10 @@ class FundListRatingsControllerTests {
     }
 
     @Test void rejectsMissingAuthenticationOrFundReadPermission() {
-        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD"));
+        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD", false, false));
         login(PermissionCode.WATCHLIST_SELF_READ);
-        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD"));
-        verifyNoInteractions(service, watchlist);
+        assertThrows(RuntimeException.class, () -> controller.listFunds(null, 10, null, 1, null, "GOOD", false, false));
+        verifyNoInteractions(service, watchlist, personalScope);
     }
 
     @Test void preservesRatingAndOwnWatchStatusInANonCacheableResponse() {
@@ -45,7 +46,7 @@ class FundListRatingsControllerTests {
                         null, null, null, false, rating)), null, 1, 10, 1, 1, false, null));
         when(watchlist.findCurrentUserFollowedFundCodes(List.of("002112"))).thenReturn(Set.of("002112"));
 
-        var result = controller.listFunds(null, 10, null, 1, null, null);
+        var result = controller.listFunds(null, 10, null, 1, null, null, false, false);
 
         assertEquals("no-store", result.getHeaders().getCacheControl());
         assertNotNull(result.getBody());
@@ -57,9 +58,23 @@ class FundListRatingsControllerTests {
         login(PermissionCode.FUND_READ);
         when(service.listFunds("华夏", "MIXED", 20, null, 1, "GOOD"))
                 .thenReturn(new FundPageResponse(List.of(), null, 1, 20, 0, 0, false, null));
-        var result = controller.listFunds("华夏", 20, null, 1, "MIXED", "GOOD");
+        var result = controller.listFunds("华夏", 20, null, 1, "MIXED", "GOOD", false, false);
         assertEquals(0, result.getBody().data().totalCount());
         verify(service).listFunds("华夏", "MIXED", 20, null, 1, "GOOD");
+        verifyNoMoreInteractions(service);
+        verifyNoInteractions(personalScope);
+    }
+
+    @Test void combinesWatchedAndHeldScopeBeforePaging() {
+        login(PermissionCode.FUND_READ);
+        when(personalScope.findFundCodes(true, true)).thenReturn(Set.of("002112"));
+        when(service.listFunds("华夏", "MIXED", 20, null, 2, "GOOD", Set.of("002112")))
+                .thenReturn(new FundPageResponse(List.of(), null, 2, 20, 0, 0, false, null));
+
+        var result = controller.listFunds("华夏", 20, null, 2, "MIXED", "GOOD", true, true);
+
+        assertEquals(0, result.getBody().data().totalCount());
+        verify(service).listFunds("华夏", "MIXED", 20, null, 2, "GOOD", Set.of("002112"));
         verifyNoMoreInteractions(service);
     }
 }

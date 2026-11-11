@@ -145,6 +145,14 @@ class FundListRatingsTests {
         verifyNoInteractions(cache);
     }
 
+    @Test void emptyPersonalScopeReturnsEmptyPageWithoutReadingOrCachingCatalog() {
+        var result = service.listFunds(null, null, 10, null, 2, null, List.of());
+        assertTrue(result.items().isEmpty());
+        assertEquals(0, result.totalCount());
+        assertEquals(2, result.page());
+        verifyNoInteractions(client, cache);
+    }
+
     @Test void oldBackendCannotSilentlyIgnoreRatingFilter() {
         when(client.listFunds(null, null, 10, null, 1, "GOOD")).thenReturn(sourcePage("002112"));
         assertThrows(AiServiceUnavailableException.class,

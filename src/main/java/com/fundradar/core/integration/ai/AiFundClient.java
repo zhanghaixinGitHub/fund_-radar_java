@@ -146,12 +146,18 @@ public class AiFundClient {
 
     /** 评级由 Python 核验并在分页前筛选；只透传白名单参数，不在 Java 重新评分。 */
     public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page, String rating) {
+        return listFunds(keyword, fundType, pageSize, cursor, page, rating, null);
+    }
+
+    /** 个人范围代码由 Java 在服务端取得，Python 只负责在分页前限定公共目录。 */
+    public AiFundPage listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page,
+                                String rating, Collection<String> fundCodes) {
         try {
             // 含评分筛选的列表在Python分页前核验完整市场，须复用评分专用
             // 等待预算；普通列表继续使用原短超时，不扩大其他资料接口等待。
             RestClient queryClient = StringUtils.hasText(rating) ? ratingRestClient : restClient;
             AiFundPage payload = queryClient.get()
-                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page, rating))
+                    .uri(uriBuilder -> buildFundListUri(uriBuilder, keyword, fundType, pageSize, cursor, page, rating, fundCodes))
                     .header(SERVICE_TOKEN_HEADER, properties.getToken())
                     .header(TRACE_ID_HEADER, TraceContext.getTraceId())
                     .retrieve()
@@ -331,7 +337,8 @@ public class AiFundClient {
 
     /** 根据可选关键字、游标或页码构造基金列表内部接口地址。 */
     private URI buildFundListUri(
-            UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page, String rating
+            UriBuilder uriBuilder, String keyword, String fundType, int pageSize, String cursor, Integer page,
+            String rating, Collection<String> fundCodes
     ) {
         uriBuilder.path("/internal/v1/funds").queryParam("pageSize", pageSize);
         if (StringUtils.hasText(keyword)) {
@@ -348,6 +355,9 @@ public class AiFundClient {
         }
         if (StringUtils.hasText(rating)) {
             uriBuilder.queryParam("rating", rating);
+        }
+        if (fundCodes != null) {
+            fundCodes.forEach(fundCode -> uriBuilder.queryParam("fundCode", fundCode));
         }
         return uriBuilder.build();
     }

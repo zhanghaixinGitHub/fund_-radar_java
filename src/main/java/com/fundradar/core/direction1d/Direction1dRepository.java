@@ -54,9 +54,31 @@ public class Direction1dRepository {
                 .param("owner",owner).param("after",after).query(String.class).list();
     }
 
+    /** 定时评分和预测使用页面模拟持仓；只计已确认且仍有份额的基金。 */
+    public List<String> heldFundCodes(String after,UUID owner) {
+        boolean valid=db.sql("SELECT EXISTS(SELECT 1 FROM user_account u WHERE " + ELIGIBLE_USER
+                + " AND u.user_id=:owner AND EXISTS(SELECT 1 FROM role_permission rp WHERE rp.role_code=u.role "
+                + "AND rp.permission_code='PORTFOLIO_SELF_READ'))")
+                .param("owner",owner).query(Boolean.class).single();
+        if(!valid) throw new com.fundradar.core.auth.service.AccessDeniedException();
+        return db.sql("SELECT p.fund_code FROM sim_position p JOIN user_account u USING(user_id) WHERE "
+                + ELIGIBLE_USER + " AND EXISTS(SELECT 1 FROM role_permission rp WHERE rp.role_code=u.role "
+                + "AND rp.permission_code='PORTFOLIO_SELF_READ') AND u.user_id=:owner "
+                + "AND (p.snapshot->>'shares')::numeric>0 AND p.fund_code>:after ORDER BY p.fund_code LIMIT 100")
+                .param("owner",owner).param("after",after).query(String.class).list();
+    }
+
+    public boolean holds(UUID user,String code) {
+        return db.sql("SELECT EXISTS(SELECT 1 FROM sim_position WHERE user_id=:u AND fund_code=:c "
+                + "AND (snapshot->>'shares')::numeric>0)")
+                .param("u",user).param("c",code).query(Boolean.class).single();
+    }
+
     public boolean predictionEligible(UUID owner,String code) {
-        return db.sql("SELECT EXISTS(SELECT 1 FROM user_account u JOIN watchlist_item w USING(user_id) WHERE "
-                + ELIGIBLE_USER + " AND u.user_id=:owner AND w.fund_code=:code)")
+        return db.sql("SELECT EXISTS(SELECT 1 FROM user_account u WHERE "
+                + ELIGIBLE_USER + " AND u.user_id=:owner AND (EXISTS(SELECT 1 FROM watchlist_item w "
+                + "WHERE w.user_id=u.user_id AND w.fund_code=:code) OR EXISTS(SELECT 1 FROM sim_position p "
+                + "WHERE p.user_id=u.user_id AND p.fund_code=:code AND (p.snapshot->>'shares')::numeric>0)))")
                 .param("owner",owner).param("code",code).query(Boolean.class).single();
     }
 
@@ -72,7 +94,8 @@ public class Direction1dRepository {
           """).param("u",user).param("after",after==null?"":after).param("size",Math.min(100,size)).query().listOfRows();
     }
     public boolean follows(UUID user,String code) {
-        return db.sql("SELECT EXISTS(SELECT 1 FROM watchlist_item WHERE user_id=:u AND fund_code=:c)")
+        return db.sql("SELECT EXISTS(SELECT 1 FROM watchlist_item WHERE user_id=:u AND fund_code=:c) "
+                + "OR EXISTS(SELECT 1 FROM sim_position WHERE user_id=:u AND fund_code=:c AND (snapshot->>'shares')::numeric>0)")
                 .param("u",user).param("c",code).query(Boolean.class).single();
     }
     /** 原作业编号只从本人已关联的档案取得；浏览器不能指定其他账号或公共作业编号。 */
@@ -274,7 +297,9 @@ public class Direction1dRepository {
           INSERT INTO direction_1d_user_forecast(user_id,forecast_id,scope_snapshot_id)
           SELECT :u,f.forecast_id,:scope FROM direction_1d_forecast f
           WHERE f.forecast_id=:id AND clock_timestamp()<f.deadline_at
-            AND EXISTS(SELECT 1 FROM watchlist_item w WHERE w.user_id=:u AND w.fund_code=f.fund_code)
+            AND (EXISTS(SELECT 1 FROM watchlist_item w WHERE w.user_id=:u AND w.fund_code=f.fund_code)
+              OR EXISTS(SELECT 1 FROM sim_position p WHERE p.user_id=:u AND p.fund_code=f.fund_code
+                AND (p.snapshot->>'shares')::numeric>0))
             AND EXISTS(SELECT 1 FROM user_account u WHERE u.user_id=:u AND u.status='ACTIVE')
           ON CONFLICT DO NOTHING
           """).param("u",user).param("id",forecast).param("scope",scope).update();

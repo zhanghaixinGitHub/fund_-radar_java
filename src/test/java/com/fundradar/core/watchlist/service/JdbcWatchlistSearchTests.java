@@ -103,7 +103,11 @@ class JdbcWatchlistSearchTests {
 
     private List<String> scopedCodes() {
         assertEquals(user.userId(), parameters.get("userId"));
-        return parameters.get("fundType") == null || "INDEX".equals(parameters.get("fundType")) ? codes : List.of();
+        List<String> typed = parameters.get("fundType") == null || "INDEX".equals(parameters.get("fundType"))
+                ? codes : List.of();
+        return currentSql.contains("sim_position")
+                ? typed.stream().filter(code -> Integer.parseInt(code) % 2 == 0).toList()
+                : typed;
     }
 
     @AfterEach
@@ -166,6 +170,20 @@ class JdbcWatchlistSearchTests {
         if (!hasMatches) {
             verifyNoInteractions(ai);
         }
+    }
+
+    @Test
+    void heldOnlyAppliesToCountPageAndKeywordSearch() {
+        var page = service.listCurrentUserItems(null, null, 2, 10, true);
+        assertEquals(26, page.totalCount());
+        assertEquals(3, page.totalPages());
+        assertEquals("000022", page.items().get(0).fundCode());
+
+        batches.clear();
+        var search = service.listCurrentUserItems("ETF", null, 1, 10, true);
+        assertEquals(26, search.totalCount());
+        assertEquals(10, search.items().size());
+        assertEquals(List.of(26), batches.stream().map(List::size).toList());
     }
 
     @Test

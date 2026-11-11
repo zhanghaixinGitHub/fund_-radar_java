@@ -8,6 +8,7 @@ import com.fundradar.core.fund.api.FundShareHistoryResponse;
 import com.fundradar.core.fund.api.WatchlistFundDetailResponse;
 
 import java.time.LocalDate;
+import java.util.Collection;
 
 /**
  * 协调基金公开查询的服务接口。
@@ -21,6 +22,10 @@ public interface FundQueryService {
 
     /** 按当前有效评级筛选后分页；评级核验失败时不使用旧评级缓存降级。 */
     FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page, String rating);
+
+    /** 在本人关注或持仓代码范围内筛选并分页；个人范围不进入共享缓存。 */
+    FundPageResponse listFunds(String keyword, String fundType, int pageSize, String cursor, Integer page,
+                               String rating, Collection<String> fundCodes);
 
     /** 查询单只基金详情，可在 AI 服务不可用时返回显式标记的缓存。 */
     FundDetailResponse getFund(String fundCode);

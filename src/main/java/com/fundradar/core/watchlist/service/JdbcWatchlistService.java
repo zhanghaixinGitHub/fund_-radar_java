@@ -51,17 +51,24 @@ public class JdbcWatchlistService implements WatchlistService {
         this.watchlistCreditService = watchlistCreditService;
     }
 
+    /** 保留既有服务调用；未显式选择时不按持仓过滤。 */
+    public WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize) {
+        return listCurrentUserItems(keyword, fundType, page, pageSize, false);
+    }
+
     @Override
     /** 查询当前认证用户的关注页；历史未分类记录先批量补齐类型快照再分页。 */
-    public WatchlistPageResponse listCurrentUserItems(String keyword, String fundType, int page, int pageSize) {
+    public WatchlistPageResponse listCurrentUserItems(
+            String keyword, String fundType, int page, int pageSize, boolean heldOnly
+    ) {
         AuthenticatedUser user = CurrentUserContext.require();
         refreshMissingFundTypes(user);
         String normalizedKeyword = keyword == null ? "" : keyword.strip().toLowerCase(Locale.ROOT);
         if (!normalizedKeyword.isEmpty()) {
-            return searchCurrentUserItems(user, normalizedKeyword, fundType, page, pageSize);
+            return searchCurrentUserItems(user, normalizedKeyword, fundType, page, pageSize, heldOnly);
         }
-        long totalCount = countCurrentUserItems(user, fundType);
-        List<StoredWatchlistItem> records = findCurrentUserPage(user, fundType, page, pageSize);
+        long totalCount = countCurrentUserItems(user, fundType, heldOnly);
+        List<StoredWatchlistItem> records = findCurrentUserPage(user, fundType, page, pageSize, heldOnly);
         Map<String, AiFundSummary> summaries = new HashMap<>();
         boolean marketDataUnavailable = false;
         if (!records.isEmpty()) {
@@ -94,14 +101,16 @@ public class JdbcWatchlistService implements WatchlistService {
      * 行情调用失败时沿用 503 错误，不能把未完成的名称搜索伪装成完整结果。
      */
     private WatchlistPageResponse searchCurrentUserItems(
-            AuthenticatedUser user, String keyword, String fundType, int page, int pageSize
+            AuthenticatedUser user, String keyword, String fundType, int page, int pageSize, boolean heldOnly
     ) {
-        long recordCount = countCurrentUserItems(user, fundType);
+        long recordCount = countCurrentUserItems(user, fundType, heldOnly);
         long offset = (long) (page - 1) * pageSize;
         long matchedCount = 0;
         List<WatchlistFundItemResponse> items = new ArrayList<>();
         for (int batchPage = 1; (long) (batchPage - 1) * SEARCH_BATCH_SIZE < recordCount; batchPage++) {
-            List<StoredWatchlistItem> records = findCurrentUserPage(user, fundType, batchPage, SEARCH_BATCH_SIZE);
+            List<StoredWatchlistItem> records = findCurrentUserPage(
+                    user, fundType, batchPage, SEARCH_BATCH_SIZE, heldOnly
+            );
             if (records.isEmpty()) {
                 break;
             }
@@ -128,6 +137,16 @@ public class JdbcWatchlistService implements WatchlistService {
                 items, page, pageSize, matchedCount, (int) ((matchedCount + pageSize - 1) / pageSize),
                 false, watchlistCreditService.getQuota(user)
         );
+    }
+
+    @Override
+    /** 市场筛选只读取本人关注代码，不接受浏览器传入用户标识。 */
+    public Set<String> findCurrentUserFollowedFundCodes() {
+        AuthenticatedUser user = CurrentUserContext.require();
+        return Set.copyOf(jdbcClient.sql("SELECT fund_code FROM watchlist_item WHERE user_id = :userId")
+                .param("userId", user.userId())
+                .query(String.class)
+                .list());
     }
 
     @Override
@@ -239,10 +258,16 @@ public class JdbcWatchlistService implements WatchlistService {
                 .orElse(null);
     }
 
-    /** 统计当前用户在可选类型筛选下的关注数，和分页查询共享完全相同的数据范围。 */
-    private long countCurrentUserItems(AuthenticatedUser user, String fundType) {
+    /** 统计和分页共用持仓条件；快照份额大于零才属于当前持仓。 */
+    private long countCurrentUserItems(AuthenticatedUser user, String fundType, boolean heldOnly) {
         String typeCondition = fundType == null ? "" : " AND fund_type = :fundType";
-        var statement = jdbcClient.sql("SELECT COUNT(*) FROM watchlist_item WHERE user_id = :userId" + typeCondition)
+        String holdingCondition = heldOnly ? """
+                 AND EXISTS (SELECT 1 FROM sim_position p
+                     WHERE p.user_id = watchlist_item.user_id AND p.fund_code = watchlist_item.fund_code
+                       AND (p.snapshot->>'shares')::numeric > 0)
+                """ : "";
+        var statement = jdbcClient.sql("SELECT COUNT(*) FROM watchlist_item WHERE user_id = :userId"
+                        + typeCondition + holdingCondition)
                 .param("userId", user.userId());
         if (fundType != null) {
             statement = statement.param("fundType", fundType);
@@ -252,15 +277,20 @@ public class JdbcWatchlistService implements WatchlistService {
 
     /** 按业务类型连续排序读取当前页；同一类型内按最近关注时间和基金代码稳定排序。 */
     private List<StoredWatchlistItem> findCurrentUserPage(
-            AuthenticatedUser user, String fundType, int page, int pageSize
+            AuthenticatedUser user, String fundType, int page, int pageSize, boolean heldOnly
     ) {
         // 筛选条件末尾保留换行，防止与后续 ORDER BY 粘连成不存在的命名参数 fundTypeORDER。
         String typeCondition = fundType == null ? "" : " AND fund_type = :fundType\n";
+        String holdingCondition = heldOnly ? """
+                AND EXISTS (SELECT 1 FROM sim_position p
+                    WHERE p.user_id = watchlist_item.user_id AND p.fund_code = watchlist_item.fund_code
+                      AND (p.snapshot->>'shares')::numeric > 0)
+                """ : "";
         var statement = jdbcClient.sql("""
                         SELECT fund_code, fund_type, created_at
                         FROM watchlist_item
                         WHERE user_id = :userId
-                        """ + typeCondition + """
+                        """ + typeCondition + holdingCondition + """
                         ORDER BY CASE COALESCE(fund_type, 'OTHER')
                             WHEN 'MONEY' THEN 10
                             WHEN 'BOND' THEN 20

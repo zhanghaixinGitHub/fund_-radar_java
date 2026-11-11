@@ -37,7 +37,7 @@ public final class Direction1dAnalysisPolicy {
             &&p.has("up_probability")&&p.get("up_probability").isNull(),"ANALYSIS_PROTOCOL_INVALID");
         LocalDate base=LocalDate.parse(p.path("base_nav_date").asText()),target=LocalDate.parse(p.path("target_nav_date").asText());
         Instant open=at(p,"window_open_at"),deadline=at(p,"deadline_at"),asOf=at(p,"as_of"),generated=at(p,"generated_at");
-        require(target.equals(Direction1dCalendar.next(base))&&Direction1dCalendar.VERSION.equals(p.path("calendar_version").asText())
+        require(target.equals(Direction1dCalendar.next(base,p.path("calendar_version").asText()))
             &&open.equals(base.atTime(15,0).atZone(Direction1dPolicy.ZONE).toInstant())
             &&deadline.equals(target.atTime(15,0).atZone(Direction1dPolicy.ZONE).toInstant())
             &&!asOf.isBefore(open)&&!generated.isBefore(asOf)&&generated.isBefore(deadline)&&!generated.isAfter(now.plusSeconds(5))
