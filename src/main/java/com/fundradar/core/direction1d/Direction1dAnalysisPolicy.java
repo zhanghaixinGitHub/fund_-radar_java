@@ -238,6 +238,9 @@ public final class Direction1dAnalysisPolicy {
         UUID.fromString(envelope.path("snapshot_id").asText());
         require(!at(p,"label_observed_at").isAfter(now.plusSeconds(5))&&!at(p,"label_observed_at").isBefore(at(original,"generated_at")),"ANALYSIS_LABEL_TIME");
         JsonNode a=p.path("base_source"),b=p.path("target_source");
+        require(p.path("fund_code").equals(original.path("fund_code"))
+            &&a.path("fund_code").equals(original.path("fund_code"))
+            &&b.path("fund_code").equals(original.path("fund_code")),"ANALYSIS_LABEL_FUND");
         require(!LocalDate.parse(original.path("target_nav_date").asText()).isAfter(now.atZone(Direction1dPolicy.ZONE).toLocalDate()),"ANALYSIS_LABEL_TIME");
         require(a.path("nav_date").equals(original.path("base_nav_date"))&&b.path("nav_date").equals(original.path("target_nav_date")),"ANALYSIS_LABEL_DATE");
         for(JsonNode v:List.of(a,b)) {

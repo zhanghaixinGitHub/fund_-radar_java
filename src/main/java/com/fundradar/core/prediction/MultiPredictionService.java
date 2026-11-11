@@ -81,6 +81,14 @@ public class MultiPredictionService {
         return client.get("/funds/"+code+"/history?limit=30"+(before==null?"":"&before="+java.net.URLEncoder.encode(before,java.nio.charset.StandardCharsets.UTF_8))
                 +(beforeId==null?"":"&beforeId="+beforeId));
     }
+    public JsonNode historyDays(String code,List<String> dates) {
+        owns(user(false),code);
+        if(dates.isEmpty()||dates.size()>50||new HashSet<>(dates).size()!=dates.size())
+            throw new IllegalArgumentException("INVALID_HISTORY_DATES");
+        for(var day:dates) if(!java.time.LocalDate.parse(day).toString().equals(day))
+            throw new IllegalArgumentException("INVALID_HISTORY_DATES");
+        return client.get("/funds/"+code+"/history-days?dates="+String.join(",",dates));
+    }
     /** 回看只作为历史资料返回；不得写公共预测引用或提交到期对错核验。 */
     public JsonNode analysisReviews(String code,String before,UUID beforeId) {
         owns(user(false),code);

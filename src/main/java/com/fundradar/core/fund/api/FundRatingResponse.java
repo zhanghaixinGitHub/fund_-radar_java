@@ -36,7 +36,8 @@ public record FundRatingResponse(
     public record Source(String title, String url, String publishedOn) { }
     /** score为同正式批次的展示分字符串；无有效评分时为空，Java不另行计算或判级。 */
     public record Dimension(String key, String name, String grade, String gradeLabel, String score, String explanation,
-            List<Metric> metrics, List<Source> sources, ScoreRange scoreRange) { }
+            List<Metric> metrics, List<Source> sources, ScoreRange scoreRange, Assessment assessment) { }
+    public record Assessment(String conclusion, List<String> paragraphs, List<String> limitations) { }
     public record Point(String dimension, String text) { }
     public record Dates(String nav, String holdings, String manager, String fees) { }
 }

@@ -20,7 +20,7 @@ public class Direction1dStatistics {
     public Map<String,Object> read(UUID user,LocalDate start,LocalDate end,String labelBasis,String predictionBasis) {
         if(!Set.of("FIRST_VALID","LAST_VALID").contains(predictionBasis))throw new IllegalArgumentException("INVALID_PREDICTION_BASIS");
         if(!Set.of("FIRST_OBSERVED","LATEST_REVISION").contains(labelBasis))throw new IllegalArgumentException("INVALID_LABEL_BASIS");
-        String answer="FIRST_OBSERVED".equals(labelBasis)?"1":"(SELECT max(revision_no) FROM direction_1d_outcome WHERE forecast_id=f.forecast_id)";
+        String answer="FIRST_OBSERVED".equals(labelBasis)?"(SELECT min(revision_no) FROM direction_1d_verified_outcome WHERE forecast_id=f.forecast_id)":"(SELECT max(revision_no) FROM direction_1d_verified_outcome WHERE forecast_id=f.forecast_id)";
         if(start.isAfter(end))throw new IllegalArgumentException("INVALID_RANGE");
         String order="FIRST_VALID".equals(predictionBasis)?"ASC":"DESC";
         // 排序方向仅由上方白名单产生；用户输入不拼接进 SQL。
@@ -54,7 +54,7 @@ public class Direction1dStatistics {
             JOIN selected USING(forecast_id)
             JOIN direction_1d_forecast_score s USING(forecast_id)
             LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
-            LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
+            LEFT JOIN direction_1d_verified_outcome o ON o.forecast_id=f.forecast_id AND o.verified_revision_no=1
             WHERE u.user_id=:u AND f.target_nav_date BETWEEN :start AND :end
           ), expanded AS (
             SELECT raw.*,dimension.kind,dimension.key FROM raw CROSS JOIN LATERAL (VALUES
@@ -83,7 +83,7 @@ public class Direction1dStatistics {
               /NULLIF(sum(CASE WHEN valid THEN 1.0/family_shares END),0) AS family_date_weighted_accuracy
           FROM expanded GROUP BY protocol,kind,key,branch_id ORDER BY CASE WHEN kind='TOTAL' THEN 0 ELSE 1 END,protocol,kind,key,branch_id LIMIT 1001
           """;
-        var all=db.sql(rows.replace("o.revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().listOfRows();
+        var all=db.sql(rows.replace("o.verified_revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().listOfRows();
         var pairs=db.sql(selection+"""
           SELECT count(*) FILTER(WHERE a.status='AVAILABLE' AND b.status='AVAILABLE') AS paired_count,
             count(*) FILTER(WHERE a.status='AVAILABLE' AND b.status<>'AVAILABLE') AS fixed_only_count,
@@ -97,11 +97,11 @@ public class Direction1dStatistics {
           JOIN direction_1d_forecast_receipt r USING(forecast_id)
           JOIN direction_1d_forecast_score a ON a.forecast_id=f.forecast_id AND a.branch_id='FIXED'
           JOIN direction_1d_forecast_score b ON b.forecast_id=f.forecast_id AND b.branch_id='WEEKLY'
-          LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
+          LEFT JOIN direction_1d_verified_outcome o ON o.forecast_id=f.forecast_id AND o.verified_revision_no=1
           WHERE u.user_id=:u AND f.protocol='DIRECTION_1D_V2' AND r.status='VERIFIED' AND f.target_nav_date BETWEEN :start AND :end
             AND encode(sha256(convert_to(f.payload_json,'UTF8')),'hex')=f.content_hash
             AND COALESCE((f.payload->>'expires_at')::timestamptz,'infinity'::timestamptz)>clock_timestamp()
-          """.replace("o.revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().singleRow();
+          """.replace("o.verified_revision_no=1","o.revision_no="+answer)).param("u",user).param("start",start).param("end",end).query().singleRow();
         var coverage=db.sql("""
           WITH attempted AS (
             SELECT DISTINCT ON(a.fund_code,a.target_nav_date) a.fund_code,a.target_nav_date,a.status,a.reasons
@@ -136,9 +136,9 @@ public class Direction1dStatistics {
             count(*) FILTER(WHERE s.predicted_direction=o.actual_direction) correct_count
           FROM ranked r JOIN direction_1d_forecast f USING(forecast_id)
           JOIN direction_1d_forecast_score s ON s.forecast_id=f.forecast_id AND s.branch_id='PRIMARY'
-          LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
+          LEFT JOIN direction_1d_verified_outcome o ON o.forecast_id=f.forecast_id AND o.verified_revision_no=1
           WHERE r.choice=1 GROUP BY r.phase ORDER BY r.phase
-          """.formatted(order,order,order).replace("o.revision_no=1","o.revision_no="+answer))
+          """.formatted(order,order,order).replace("o.verified_revision_no=1","o.revision_no="+answer))
             .param("u",user).param("start",start).param("end",end).query().listOfRows();
         Map<String,Object> result=new LinkedHashMap<>(Map.of("branches",all.stream().filter(r->"TOTAL".equals(r.get("kind"))).toList(),
                 "strata",all.stream().filter(r->!"TOTAL".equals(r.get("kind"))).limit(1000).toList(),"strataTruncated",all.size()>1000,

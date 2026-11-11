@@ -307,7 +307,7 @@ public class Direction1dRepository {
     public List<Map<String,Object>> reviewPage(UUID after) {
         return db.sql("""
           SELECT f.forecast_id,f.source_job_id,f.fund_code,f.base_nav_date,f.target_nav_date,c.market_revision,
-            EXISTS(SELECT 1 FROM direction_1d_outcome o WHERE o.forecast_id=f.forecast_id) AS has_outcome
+            EXISTS(SELECT 1 FROM direction_1d_verified_outcome o WHERE o.forecast_id=f.forecast_id) AS has_outcome
           FROM direction_1d_forecast f LEFT JOIN direction_1d_review_checkpoint c USING(forecast_id)
           WHERE f.target_nav_date<=(clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::date
             AND (f.payload->>'expires_at')::timestamptz>clock_timestamp()
@@ -320,6 +320,61 @@ public class Direction1dRepository {
           INSERT INTO direction_1d_review_checkpoint(forecast_id,market_revision) VALUES(:id,:revision)
           ON CONFLICT(forecast_id) DO UPDATE SET market_revision=EXCLUDED.market_revision,checked_at=clock_timestamp()
           """).param("id",forecast).param("revision",revision).update();
+    }
+    /** 每日任务仅核对本人当前模拟正份额持仓的原档案，截止日固定且逐页有界。 */
+    public List<Map<String,Object>> dueOutcomes(UUID owner,LocalDate dueBefore,UUID after) {
+        return dueOutcomes(owner,dueBefore,after,false);
+    }
+    public List<String> archivedFundCodes(UUID owner) {
+        heldFundCodes("",owner);
+        return db.sql("SELECT DISTINCT f.fund_code FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id) "
+                +"WHERE u.user_id=:owner ORDER BY f.fund_code").param("owner",owner).query(String.class).list();
+    }
+    public List<Map<String,Object>> dueOutcomes(UUID owner,LocalDate dueBefore,UUID after,boolean archive) {
+        heldFundCodes("",owner); // 即使空持仓也验证账号和权限，不能退回公共范围。
+        return db.sql("""
+          SELECT f.forecast_id,f.source_job_id,f.fund_code,
+            EXISTS(SELECT 1 FROM direction_1d_verified_outcome o WHERE o.forecast_id=f.forecast_id) AS has_outcome
+          FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+          WHERE u.user_id=:owner AND f.target_nav_date<:dueBefore
+            AND (f.payload->>'expires_at')::timestamptz>clock_timestamp()
+            AND (:after::uuid IS NULL OR f.forecast_id>:after)
+            AND (:archive OR EXISTS(SELECT 1 FROM sim_position p WHERE p.user_id=:owner AND p.fund_code=f.fund_code
+              AND (p.snapshot->>'shares')::numeric>0))
+          ORDER BY f.forecast_id LIMIT 50
+          """).param("owner",owner).param("dueBefore",dueBefore).param("after",after).param("archive",archive).query().listOfRows();
+    }
+    public void outcomeCheck(UUID forecast,String status) {
+        db.sql("""
+          INSERT INTO direction_1d_outcome_check(forecast_id,status) VALUES(:id,:status)
+          ON CONFLICT(forecast_id) DO UPDATE SET status=EXCLUDED.status,checked_at=clock_timestamp()
+          """).param("id",forecast).param("status",status).update();
+    }
+    public boolean hasVerifiedOutcome(UUID id) {
+        return db.sql("SELECT EXISTS(SELECT 1 FROM direction_1d_verified_outcome WHERE forecast_id=:id)")
+                .param("id",id).query(Boolean.class).single();
+    }
+    public Map<String,Object> outcomeSummary(UUID owner,LocalDate dueBefore) {
+        return outcomeSummary(owner,dueBefore,false);
+    }
+    public Map<String,Object> outcomeSummary(UUID owner,LocalDate dueBefore,boolean archive) {
+        heldFundCodes("",owner);
+        return db.sql("""
+          WITH due AS (
+            SELECT f.forecast_id,c.status,
+              EXISTS(SELECT 1 FROM direction_1d_verified_outcome o WHERE o.forecast_id=f.forecast_id) AS ready
+            FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
+            LEFT JOIN direction_1d_outcome_check c USING(forecast_id)
+            WHERE u.user_id=:owner AND f.target_nav_date<:dueBefore
+              AND (f.payload->>'expires_at')::timestamptz>clock_timestamp()
+              AND (:archive OR EXISTS(SELECT 1 FROM sim_position p WHERE p.user_id=:owner AND p.fund_code=f.fund_code
+                AND (p.snapshot->>'shares')::numeric>0))
+          ) SELECT count(*) AS total,count(*) FILTER(WHERE ready) AS completed,
+            count(*) FILTER(WHERE NOT ready AND status='PENDING_DATA') AS pending,
+            count(*) FILTER(WHERE NOT ready AND status='FAILED') AS failed,
+            count(*) FILTER(WHERE NOT ready AND (status IS NULL OR status='SUCCEEDED')) AS remaining
+          FROM due
+          """).param("owner",owner).param("dueBefore",dueBefore).param("archive",archive).query().singleRow();
     }
     public void outcome(UUID id,JsonNode label) {
         JsonNode p=label.path("payload");
@@ -346,8 +401,9 @@ public class Direction1dRepository {
     public Map<String,Object> detail(UUID user,UUID id) {
         var row=db.sql("""
           SELECT f.forecast_id,f.payload_json,f.content_hash,f.stored_at,r.receipt_verified_at,r.status,u.linked_at,
-            COALESCE((SELECT jsonb_agg(o.payload ORDER BY o.revision_no) FROM direction_1d_outcome o
-              WHERE o.forecast_id=f.forecast_id),'[]'::jsonb)::text AS outcomes_json
+            COALESCE((SELECT jsonb_agg(o.payload ORDER BY o.revision_no) FROM direction_1d_verified_outcome o
+              WHERE o.forecast_id=f.forecast_id),'[]'::jsonb)::text AS outcomes_json,
+            (SELECT status FROM direction_1d_outcome_check WHERE forecast_id=f.forecast_id) AS check_status
           FROM direction_1d_forecast f JOIN direction_1d_user_forecast u USING(forecast_id)
           LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id) WHERE f.forecast_id=:id AND u.user_id=:u
           """).param("id",id).param("u",user).query().listOfRows().stream().findFirst().orElseThrow(()->new NoSuchElementException("记录不属于本人"));
@@ -363,6 +419,7 @@ public class Direction1dRepository {
         result.put("storedAt",row.get("stored_at")); result.put("receiptVerifiedAt",row.get("receipt_verified_at"));
         result.put("receiptStatus",row.get("status")); result.put("linkedAt",row.get("linked_at"));
         result.put("outcomes",Direction1dPolicy.view(decode((String)row.get("outcomes_json"))));
+        result.put("outcomeCheck",Map.of("status",Objects.toString(row.get("check_status"),"UNCHECKED")));
         return result;
     }
     public Map<String,Object> history(UUID user,String code,LocalDate start,LocalDate end,int page,int size) {
@@ -373,11 +430,12 @@ public class Direction1dRepository {
             LocalDate beforeDate,UUID beforeId,String branch,String assessment) {
         String condition=" FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id) WHERE u.user_id=:u AND (:code='' OR f.fund_code=:code) AND f.target_nav_date BETWEEN :start AND :end";
         condition+=" AND (:branch='' OR EXISTS(SELECT 1 FROM direction_1d_forecast_score b WHERE b.forecast_id=f.forecast_id AND b.branch_id=:branch AND b.status='AVAILABLE'))"
-                +" AND (:assessment='' OR (:assessment='ASSESSED')=EXISTS(SELECT 1 FROM direction_1d_outcome o WHERE o.forecast_id=f.forecast_id))";
+                +" AND (:assessment='' OR (:assessment='ASSESSED')=EXISTS(SELECT 1 FROM direction_1d_verified_outcome o WHERE o.forecast_id=f.forecast_id))";
         String select="SELECT f.forecast_id,f.payload_json,f.content_hash,f.stored_at,u.linked_at,"
+                +"(SELECT status FROM direction_1d_outcome_check WHERE forecast_id=f.forecast_id) AS check_status,"
                 +"(SELECT receipt_verified_at FROM direction_1d_forecast_receipt WHERE forecast_id=f.forecast_id) AS receipt_verified_at,"
                 +"(SELECT status FROM direction_1d_forecast_receipt WHERE forecast_id=f.forecast_id) AS status,"
-                +"COALESCE((SELECT jsonb_agg(o.payload ORDER BY o.revision_no) FROM direction_1d_outcome o WHERE o.forecast_id=f.forecast_id),'[]'::jsonb)::text AS outcomes_json";
+                +"COALESCE((SELECT jsonb_agg(o.payload ORDER BY o.revision_no) FROM direction_1d_verified_outcome o WHERE o.forecast_id=f.forecast_id),'[]'::jsonb)::text AS outcomes_json";
         var q=db.sql(select+",f.target_nav_date"+condition+" AND (:beforeDate::date IS NULL OR (f.target_nav_date,f.forecast_id)<(:beforeDate,:beforeId)) ORDER BY f.target_nav_date DESC,f.forecast_id DESC LIMIT :size OFFSET :offset")
                 .param("u",user).param("code",code==null?"":code).param("start",start).param("end",end).param("size",size)
                 .param("branch",branch).param("assessment",assessment).param("beforeDate",beforeDate).param("beforeId",beforeId)
@@ -411,7 +469,7 @@ public class Direction1dRepository {
           FROM direction_1d_user_forecast u JOIN direction_1d_forecast f USING(forecast_id)
           JOIN ranked picked USING(forecast_id)
           JOIN direction_1d_forecast_score s USING(forecast_id) LEFT JOIN direction_1d_forecast_receipt r USING(forecast_id)
-          LEFT JOIN direction_1d_outcome o ON o.forecast_id=f.forecast_id AND o.revision_no=1
+          LEFT JOIN direction_1d_verified_outcome o ON o.forecast_id=f.forecast_id AND o.verified_revision_no=1
           WHERE u.user_id=:u AND picked.choice=1 AND s.status='AVAILABLE' GROUP BY f.protocol,s.branch_id ORDER BY f.protocol,s.branch_id
           """).param("u",user).query().listOfRows();
     }

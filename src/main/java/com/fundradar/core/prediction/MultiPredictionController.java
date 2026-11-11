@@ -15,6 +15,10 @@ public class MultiPredictionController {
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","no-store, private"); }
     @GetMapping("/watchlist/{code}/predictions") public ApiResponse<?> current(@PathVariable String code) { return ok(service.current(code)); }
     @GetMapping("/watchlist/{code}/predictions/history") public ApiResponse<?> history(@PathVariable String code,@RequestParam(required=false) String before,@RequestParam(required=false) UUID beforeId) { return ok(service.history(code,before,beforeId)); }
+    @GetMapping("/watchlist/{code}/predictions/history-days")
+    public ApiResponse<?> historyDays(@PathVariable String code,@RequestParam List<String> dates) {
+        return ok(service.historyDays(code,dates));
+    }
     /** 事后回看使用独立读取入口，继续校验登录与本人当前关注范围。 */
     @GetMapping("/watchlist/{code}/analysis-reviews")
     public ApiResponse<?> analysisReviews(@PathVariable String code,@RequestParam(required=false) String before,

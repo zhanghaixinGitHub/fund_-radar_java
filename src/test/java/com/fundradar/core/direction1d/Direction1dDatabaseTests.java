@@ -54,6 +54,30 @@ class Direction1dDatabaseTests {
     }
     @AfterEach void clear(){CurrentUserContext.clear();}
 
+    @Test void wrongFundLegacyAnswerIsPreservedButExcludedAndFirstCorrectRevisionIsSelected() {
+        UUID analysis=UUID.randomUUID();
+        db.sql("""
+          INSERT INTO direction_1d_forecast(forecast_id,source_job_id,protocol,cohort_id,fund_code,base_nav_date,target_nav_date,
+            calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at)
+          SELECT :id,:job,'DIRECTION_1D_ANALYSIS_V1',:cohort,fund_code,base_nav_date,target_nav_date,
+            calendar_version,window_open_at,deadline_at,payload_json,payload,input_hash,content_hash,generated_at
+          FROM direction_1d_forecast WHERE forecast_id=:old
+          """).param("id",analysis).param("job",UUID.randomUUID()).param("cohort",UUID.randomUUID().toString())
+                .param("old",forecast).update();
+        for(int revision=1;revision<=2;revision++) db.sql("""
+          INSERT INTO direction_1d_outcome(forecast_id,revision_no,label_snapshot_id,label_hash,payload,base_unit_nav,
+            target_unit_nav,y,actual_direction,nav_return,label_observed_at,revision_reason)
+          VALUES(:id,:revision,:snapshot,:hash,CAST(:payload AS jsonb),1,1.1,1,'UP',0.1,clock_timestamp(),'TEST')
+          """).param("id",analysis).param("revision",revision).param("snapshot",UUID.randomUUID())
+                .param("hash",(revision==1?"c":"d").repeat(64))
+                .param("payload",revision==1?"{}":"{\"fund_code\":\"123456\",\"base_source\":{\"fund_code\":\"123456\"},\"target_source\":{\"fund_code\":\"123456\"}}")
+                .update();
+        assertEquals(2,db.sql("SELECT count(*) FROM direction_1d_outcome WHERE forecast_id=:id")
+                .param("id",analysis).query(Integer.class).single());
+        assertEquals(2,db.sql("SELECT revision_no FROM direction_1d_verified_outcome WHERE forecast_id=:id AND verified_revision_no=1")
+                .param("id",analysis).query(Integer.class).single());
+    }
+
     @Test void personalSyncQueriesAndJobCompletionKeepOwnerBoundary() {
         LocalDate target=LocalDate.of(2026,9,14);
         assertEquals(List.of("123456"),repo.predictionFundCodes("",user));

@@ -117,4 +117,20 @@ class FundRatingTests {
         assertEquals("65", detail.scoreCoverage().pointWeight());
         assertEquals("59.61", detail.dimensions().get(0).scoreRange().lower());
     }
+
+    @Test void assessmentPassesThroughWithPublishedScoresAndOldResponsesRemainReadable() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var detail = mapper.readValue("""
+                {"fundCode":"013472","status":"SCORED","score":"75.65","grade":null,
+                 "dimensions":[{"key":"return","score":"79.18",
+                   "assessment":{"conclusion":"比基准少跌，但实际收益仍为负。",
+                     "paragraphs":["基金回报-12.82%。"],"limitations":["不是未来收益保证。"]}}]}
+                """, FundRatingResponse.class);
+        assertEquals("75.65", detail.score());
+        assertNull(detail.grade());
+        assertEquals("79.18", detail.dimensions().get(0).score());
+        assertEquals("比基准少跌，但实际收益仍为负。", detail.dimensions().get(0).assessment().conclusion());
+        var old = mapper.readValue("{\"key\":\"risk\",\"score\":null}", FundRatingResponse.Dimension.class);
+        assertNull(old.assessment());
+    }
 }
