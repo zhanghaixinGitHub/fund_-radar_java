@@ -47,7 +47,18 @@ public final class SimulationAccounting {
     public static Calculation calculate(String code, String name, List<Order> input, Market market,
                                         SimulationCalendar calendar, LocalDate today, Map<String,FeeSchedule> fees,
                                         OpeningBalance opening) {
-        List<Order> orders = input.stream().filter(o -> !o.status().equals("CANCELLED"))
+        return calculate(code,name,input,market,calendar,today,fees,opening,false);
+    }
+    /** 收益更新只重放已确认成交证据。待确认订单不参与，不能因为净值已公布就被确认。 */
+    public static Valuation valueConfirmed(String code,String name,List<Order> input,Market market,
+                                           SimulationCalendar calendar,LocalDate today,OpeningBalance opening) {
+        var value=calculate(code,name,input,market,calendar,today,Map.of(),opening,true);
+        return new Valuation(value.position(),value.daily());
+    }
+    private static Calculation calculate(String code,String name,List<Order> input,Market market,
+                                          SimulationCalendar calendar,LocalDate today,Map<String,FeeSchedule> fees,
+                                          OpeningBalance opening,boolean valuationOnly) {
+        List<Order> orders = input.stream().filter(o -> valuationOnly ? "CONFIRMED".equals(o.status()) : !o.status().equals("CANCELLED"))
                 .sorted(Comparator.comparing(Order::tradeDate).thenComparing(Order::createdAt).thenComparing(Order::orderId))
                 .toList();
         if (orders.isEmpty() && opening==null) return empty(code,name);
@@ -140,12 +151,20 @@ public final class SimulationAccounting {
                 }
             }
             for (var order : byDate.getOrDefault(date,List.of())) {
+                // 只估值时锁定原成交份额、成本及费用。价格更正需另行核对，不能静默改写确认过的交易。
+                Execution fixed=valuationOnly ? order.execution() : null;
+                if(valuationOnly && (fixed==null || !order.orderId().equals(fixed.orderId())
+                        || fixed.unitNav()==null || fixed.unitNav().compareTo(nav.unitNav())!=0
+                        || fixed.shares()==null || fixed.shares().signum()<=0
+                        || fixed.cost()==null || fixed.cost().signum()<0 || fixed.grossAmount()==null
+                        || fixed.realizedGain()==null))
+                    throw invalid("已确认成交的净值或成交记录待核对，收益暂不更新。");
                 BigDecimal quantity,gross,released=ZERO,gain=ZERO;
                 // 费用口径跟随订单规则版本：V1 历史订单重放保持无费，V2 订单计申购费与分档赎回费。
                 boolean v2=RULE_V2.equals(order.ruleVersion());
                 BigDecimal fee=null,net=null;
                 if (order.side().equals("BUY")) {
-                    BigDecimal rate=v2 ? purchaseRate(fees.getOrDefault(code,new FeeSchedule(ZERO,List.of()))) : ZERO;
+                    BigDecimal rate=v2 && !valuationOnly ? purchaseRate(fees.getOrDefault(code,new FeeSchedule(ZERO,List.of()))) : ZERO;
                     BigDecimal netAmount=order.amount();
                     fee=ZERO;
                     if (rate.signum()>0) {
@@ -153,15 +172,17 @@ public final class SimulationAccounting {
                         netAmount=precise(order.amount().divide(BigDecimal.ONE.add(rate),8,RoundingMode.HALF_UP));
                         fee=money(order.amount().subtract(netAmount));
                     }
-                    quantity=netAmount.divide(nav.unitNav(),8,RoundingMode.DOWN);
+                    quantity=fixed==null ? netAmount.divide(nav.unitNav(),8,RoundingMode.DOWN) : fixed.shares();
                     if (quantity.signum()<=0) throw invalid("买入金额不足以形成有效模拟份额。");
-                    gross=order.amount();
+                    gross=fixed==null ? order.amount() : fixed.grossAmount();
+                    if(fixed!=null && fixed.cost().compareTo(gross)!=0)
+                        throw invalid("已确认买入成本与投入金额不一致，收益待核对。");
                     // 成本记全额投入（本金口径），费用体现在份额减少上；确认日=净值归属日，可用日=次一交易日
                     lots.add(new Lot(quantity,gross,date,order.eligibleDate()));
                     shares=shares.add(quantity); cost=cost.add(gross); buy=buy.add(gross);
                     net=v2 ? netAmount : null; fee=v2 ? fee : null;
                 } else {
-                    quantity=order.shares();
+                    quantity=fixed==null ? order.shares() : fixed.shares();
                     if (quantity.compareTo(shares)>0) throw invalid("历史净值修正后卖出份额不足，需核对已有交易。");
                     BigDecimal remaining=quantity;
                     BigDecimal feeTotal=ZERO;
@@ -173,7 +194,7 @@ public final class SimulationAccounting {
                         BigDecimal allocated=used.compareTo(lot.shares)==0 ? lot.cost :
                                 lot.cost.multiply(used).divide(lot.shares,8,RoundingMode.HALF_UP);
                         released=released.add(allocated);
-                        if (v2) {
+                        if (v2 && !valuationOnly) {
                             // 赎回费按批次持有自然天数分档，逐批计算后从赎回净额中扣减
                             FeeSchedule schedule=fees.getOrDefault(code,new FeeSchedule(ZERO,List.of()));
                             // 期初持仓未提供真实购买日，使用已配置最高档作保守估算，不以录入日伪造持有期限。
@@ -185,13 +206,16 @@ public final class SimulationAccounting {
                         remaining=remaining.subtract(used); lot.shares=lot.shares.subtract(used); lot.cost=lot.cost.subtract(allocated);
                         if (lot.shares.signum()==0) lots.remove();
                     }
-                    gross=money(quantity.multiply(nav.unitNav()));
-                    BigDecimal netAmount=gross.subtract(feeTotal);
+                    gross=fixed==null ? money(quantity.multiply(nav.unitNav())) : fixed.grossAmount();
+                    BigDecimal netAmount=fixed==null ? gross.subtract(feeTotal) : fixed.netAmount()==null ? gross : fixed.netAmount();
+                    if(fixed!=null && (released.compareTo(fixed.cost())!=0
+                            || netAmount.subtract(released).compareTo(fixed.realizedGain())!=0))
+                        throw invalid("已确认卖出成本或收益不能对齐，收益待核对。");
                     gain=netAmount.subtract(released); realized=realized.add(gain); sell=sell.add(netAmount);
                     shares=shares.subtract(quantity); cost=cost.subtract(released);
                     net=v2 ? netAmount : null; fee=v2 ? money(feeTotal) : null;
                 }
-                executions.add(new Execution(order.orderId(),quantity,nav.unitNav(),gross,
+                executions.add(fixed!=null ? fixed : new Execution(order.orderId(),quantity,nav.unitNav(),gross,
                         order.side().equals("BUY") ? gross : released,gain,nav.revision(),market.source(),fee,net,
                         v2 ? order.ruleVersion() : null));
             }

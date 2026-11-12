@@ -81,6 +81,10 @@ public final class SimulationTypes {
                                 String revision, boolean paid) {}
     public record Calculation(Position position, List<Execution> executions, List<Daily> daily,
                               List<DividendEntry> dividends) {}
+    /** 独立收益投影没有订单执行结果或交易流水，不能传给结算保存入口。 */
+    public record Valuation(Position position,List<Daily> daily) {}
+    /** 仅供收益缺失原因判断，记录本轮实际读取到的净值日期，不猜测行情已到达。 */
+    public record ValuationState(Instant checkedAt,List<String> navDates,String status,String message) {}
     public record Plan(UUID planId, UUID userId, String fundCode, String fundName, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal amount,
                        String frequency, int dayValue, LocalDate startDate, LocalDate endDate, Integer maxPeriods,
                        LocalDate scheduledDate, LocalDate executionDate, String status, int version,

@@ -22,6 +22,9 @@ import static com.fundradar.core.simulation.SimulationTypes.*;
 /** PostgreSQL 模拟账本仓储；所有个人读写显式携带服务端取得的归属键。 */
 @Repository
 public class SimulationRepository {
+    // 独立估值完成后，用估值自身的核对结果判断收益，交易问题继续保留在 issue 中。
+    private static final String EARNINGS_USABLE="COALESCE(p.valuation_state->>'status',CASE WHEN p.issue IS NULL THEN 'UNKNOWN' ELSE 'REVIEW' END)<>'REVIEW'";
+    private static final String EARNINGS_SOURCE="(p.valuation_state->'navDates' IS NULL OR p.valuation_state->'navDates'='null'::jsonb OR jsonb_exists(p.valuation_state->'navDates',CAST(d.valuation_date AS text)))";
     private final JdbcClient db;
     private final JdbcTemplate batch;
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
@@ -323,6 +326,39 @@ public class SimulationRepository {
             statement.setBigDecimal(4,d.marketValue()); statement.setBigDecimal(5,d.cumulativeGain()); statement.setBigDecimal(6,d.dailyGain());
         });
     }
+    /** 仅保存既有持仓的收益投影。这里没有任何订单、定投、费用或交易流水写入。 */
+    public void saveValuation(UUID user,Position previous,Valuation value,ValuationState state,Instant now) {
+        Position p=value.position();
+        if(!previous.fundCode().equals(p.fundCode())||previous.shares().compareTo(p.shares())!=0
+                ||previous.cost().compareTo(p.cost())!=0||previous.totalBuy().compareTo(p.totalBuy())!=0
+                ||previous.totalSell().compareTo(p.totalSell())!=0||previous.realizedGain().compareTo(p.realizedGain())!=0)
+            throw new SimulationException("SIM_DATA_REVIEW","已确认份额或成本不能对齐，收益待核对。");
+        int changed=db.sql("""
+            UPDATE sim_position SET snapshot=CAST(:snapshot AS jsonb),valuation_state=CAST(:state AS jsonb),updated_at=:now
+            WHERE user_id=:user AND fund_code=:code
+            """).param("snapshot",encode(p)).param("state",encode(state)).param("now",ts(now))
+                .param("user",user).param("code",p.fundCode()).update();
+        if(changed!=1) throw new IllegalStateException("VALUATION_POSITION_MISSING");
+        // 缺失来源的旧点保留作历史，读取时按本轮实际来源日期排除，不能继续冒充有效收益。
+        batch.batchUpdate("""
+            INSERT INTO sim_daily_valuation(user_id,fund_code,valuation_date,market_value,cumulative_gain,daily_gain)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,fund_code,valuation_date) DO UPDATE
+            SET market_value=EXCLUDED.market_value,cumulative_gain=EXCLUDED.cumulative_gain,daily_gain=EXCLUDED.daily_gain
+            WHERE (sim_daily_valuation.market_value,sim_daily_valuation.cumulative_gain,sim_daily_valuation.daily_gain)
+            IS DISTINCT FROM (EXCLUDED.market_value,EXCLUDED.cumulative_gain,EXCLUDED.daily_gain)
+            """,value.daily(),500,(statement,d) -> {
+                statement.setObject(1,user); statement.setString(2,p.fundCode()); statement.setObject(3,d.date());
+                statement.setBigDecimal(4,d.marketValue()); statement.setBigDecimal(5,d.cumulativeGain()); statement.setBigDecimal(6,d.dailyGain());
+            });
+    }
+    public void valuationState(UUID user,String code,ValuationState state) {
+        // 网络失败保留上次净值日期；既有待核对问题不能被一次网络失败清掉。
+        String incoming="CASE WHEN :retry AND valuation_state->>'status'='REVIEW' THEN valuation_state "
+                +"WHEN :retry THEN CAST(:state AS jsonb)||jsonb_build_object('navDates',valuation_state->'navDates') ELSE CAST(:state AS jsonb) END";
+        db.sql("UPDATE sim_position SET valuation_state="+incoming+" WHERE user_id=:user AND fund_code=:code "
+                +"AND (valuation_state-'checkedAt') IS DISTINCT FROM (("+incoming+")-'checkedAt')")
+                .param("retry","RETRY".equals(state.status())).param("state",encode(state)).param("user",user).param("code",code).update();
+    }
     public void ledger(UUID user,String code,String key,String type,Object payload,Instant now) {
         String data=encode(payload);
         var previous=db.sql("""
@@ -357,22 +393,26 @@ public class SimulationRepository {
               SELECT fund_code,min(valuation_date),max(valuation_date),NULL::text
               FROM sim_daily_valuation WHERE user_id=:user
             """+filter+" GROUP BY fund_code UNION ALL "+"""
-              SELECT fund_code,(opening_balance->>'startDate')::date,NULL::date,opening_balance->>'fundName'
+              SELECT fund_code,CASE WHEN jsonb_typeof(opening_balance->'startDate')='array'
+                THEN make_date((opening_balance->'startDate'->>0)::int,(opening_balance->'startDate'->>1)::int,(opening_balance->'startDate'->>2)::int)
+                ELSE (opening_balance->>'startDate')::date END,NULL::date,opening_balance->>'fundName'
               FROM sim_position WHERE user_id=:user AND opening_balance IS NOT NULL
             """+filter+"), funds AS ("+"""
               SELECT fund_code,min(first_date) AS first_date,max(last_date) AS last_date,max(fund_name) AS fund_name
               FROM history GROUP BY fund_code)
-            SELECT f.*,p.snapshot,p.issue FROM funds f LEFT JOIN sim_position p
+            SELECT f.*,p.snapshot,p.issue,p.valuation_state FROM funds f LEFT JOIN sim_position p
               ON p.user_id=:user AND p.fund_code=f.fund_code ORDER BY f.fund_code LIMIT 2001
             """).param("user",user);
         if(code!=null) query.param("code",code);
         return query.query((r,n) -> {
             var p=decode(r.getString("snapshot"),Position.class);
+            var state=decode(r.getString("valuation_state"),ValuationState.class);
             return new SimulationEarnings.Fund(r.getString("fund_code"),p!=null ? p.fundName() :
                     Objects.requireNonNullElse(r.getString("fund_name"),r.getString("fund_code")),
                     r.getObject("first_date",LocalDate.class),r.getObject("last_date",LocalDate.class),
                     p!=null && p.shares().signum()==0 && (p.totalBuy().signum()>0 || p.estimatedShares()),
-                    p==null ? null : p.marketValue(),p==null ? null : p.navDate(),r.getString("issue")!=null);
+                    p==null ? null : p.marketValue(),p==null ? null : p.navDate(),
+                    state==null ? r.getString("issue")!=null : "REVIEW".equals(state.status()),state,p==null ? null : p.openingDate());
         }).list();
     }
 
@@ -381,13 +421,13 @@ public class SimulationRepository {
         String filter=code==null ? "" : " AND d.fund_code=:code";
         var query=db.sql("""
             SELECT d.valuation_date,
-              count(*) FILTER (WHERE p.issue IS NULL) AS valued,
-              count(d.daily_gain) FILTER (WHERE p.issue IS NULL) AS known,
-              sum(d.daily_gain) FILTER (WHERE p.issue IS NULL) AS daily_gain,
-              sum(d.cumulative_gain) FILTER (WHERE p.issue IS NULL) AS cumulative_gain
+              count(*) FILTER (WHERE %1$s) AS valued,
+              count(d.daily_gain) FILTER (WHERE %1$s) AS known,
+              sum(d.daily_gain) FILTER (WHERE %1$s) AS daily_gain,
+              sum(d.cumulative_gain) FILTER (WHERE %1$s) AS cumulative_gain
             FROM sim_daily_valuation d LEFT JOIN sim_position p ON p.user_id=d.user_id AND p.fund_code=d.fund_code
             WHERE d.user_id=:user AND d.valuation_date BETWEEN :start AND :end
-            """+filter+" GROUP BY d.valuation_date ORDER BY d.valuation_date")
+            """.formatted(EARNINGS_USABLE)+filter+" AND "+EARNINGS_SOURCE+" GROUP BY d.valuation_date ORDER BY d.valuation_date")
                 .param("user",user).param("start",start).param("end",end);
         if(code!=null) query.param("code",code);
         return query.query((r,n) -> new SimulationEarnings.Aggregate(r.getObject(1,LocalDate.class),r.getInt(2),r.getInt(3),
@@ -469,6 +509,33 @@ public class SimulationRepository {
             SELECT a.user_id FROM sim_account a JOIN user_account u ON u.user_id=a.user_id
             WHERE u.status='ACTIVE' AND (:after IS NULL OR a.user_id > CAST(:after AS uuid)) ORDER BY a.user_id LIMIT :size
             """).param("after",after==null ? null : after.toString(),java.sql.Types.VARCHAR).param("size",size).query(UUID.class).list();
+    }
+    /** 只看指定账号的期初持仓和已确认交易；待确认订单、定投计划不会扩大估值范围。 */
+    public Map<String,LocalDate> valuationNeeds(UUID user) {
+        var result=new LinkedHashMap<String,LocalDate>();
+        db.sql("""
+            SELECT p.fund_code,p.opening_balance,min(o.trade_date) AS first_trade
+            FROM sim_position p JOIN user_account u ON u.user_id=p.user_id AND u.status='ACTIVE'
+            LEFT JOIN sim_order o ON o.user_id=p.user_id AND o.fund_code=p.fund_code AND o.status='CONFIRMED'
+            WHERE p.user_id=:user GROUP BY p.fund_code,p.opening_balance
+            HAVING p.opening_balance IS NOT NULL OR min(o.trade_date) IS NOT NULL ORDER BY p.fund_code
+            """).param("user",user).query((r,n) -> {
+                var opening=decode(r.getString("opening_balance"),OpeningBalance.class);
+                LocalDate first=r.getObject("first_trade",LocalDate.class);
+                if(opening!=null && (first==null || opening.navDate().isBefore(first))) first=opening.navDate();
+                result.put(r.getString("fund_code"),first); return 0;
+            }).list();
+        return result;
+    }
+    /** 不含自己更新的收益及时间戳；无新成交、持仓起点或行情时不反复写入。 */
+    public String valuationRevision(UUID user) {
+        return db.sql("""
+            SELECT md5(concat_ws('|',
+              (SELECT string_agg(concat_ws(':',fund_code,opening_balance::text),'|' ORDER BY fund_code)
+                FROM sim_position WHERE user_id=:user),
+              (SELECT string_agg(concat_ws(':',order_id,execution::text),'|' ORDER BY order_id)
+                FROM sim_order WHERE user_id=:user AND status='CONFIRMED')))
+            """).param("user",user).query(String.class).single();
     }
     public Map<String,LocalDate> marketNeeds() {
         var result=new LinkedHashMap<String,LocalDate>();

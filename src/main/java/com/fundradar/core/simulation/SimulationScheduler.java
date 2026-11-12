@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -18,6 +19,9 @@ import static com.fundradar.core.simulation.SimulationTypes.*;
 @Component
 @ConditionalOnProperty(name="simulation.enabled",havingValue="true",matchIfMissing=true)
 public class SimulationScheduler {
+    /** 定投下单与订单结算默认关闭；手动接口不受此定时开关影响。 */
+    @Value("${simulation.settlement.enabled:false}")
+    private boolean automaticSettlementEnabled;
     private static final Logger LOGGER=LoggerFactory.getLogger(SimulationScheduler.class);
     private final SimulationRepository repo;
     private final SimulationMarketClient market;
@@ -37,6 +41,7 @@ public class SimulationScheduler {
     }
     @Scheduled(fixedDelayString="${simulation.fixed-delay:PT1M}",initialDelayString="${simulation.initial-delay:PT15S}")
     public void tick() {
+        if(!automaticSettlementEnabled) return;
         try(Connection lock=dataSource.getConnection()) {
             try(var statement=lock.prepareStatement("SELECT pg_try_advisory_lock(721105,1)")) {
                 var result=statement.executeQuery(); result.next(); if(!result.getBoolean(1)) return;

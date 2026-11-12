@@ -38,6 +38,9 @@ class SimulationSchedulerTests {
         scheduler=new SimulationScheduler(repo,market,service,mock(DataSource.class),clock,revisions);
     }
 
+    @Test void automaticSettlementIsDisabledWithoutExplicitEnabling() {
+        scheduler.tick(); verifyNoInteractions(repo,market,service,revisions);
+    }
     @Test void idleTicksOnlyReadBatchVersions() {
         scheduler.run(); scheduler.run(); scheduler.run();
         verify(market,times(1)).calendar();

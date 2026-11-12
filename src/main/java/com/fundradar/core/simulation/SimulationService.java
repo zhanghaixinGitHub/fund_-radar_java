@@ -75,9 +75,11 @@ public class SimulationService {
         for(var p:positions) {
             var fund=funds.stream().filter(f -> f.fundCode().equals(p.fundCode())).findFirst().orElse(null);
             var value=values.get(p.fundCode());
-            String status=p.issue()!=null ? "REVIEW" : fund==null || date.isBefore(fund.firstDate()) ? "MISSING"
+            if(fund!=null&&!SimulationEarnings.sourceContains(fund,date)) value=null;
+            String status=fund==null || date.isBefore(fund.firstDate()) ? "MISSING" : fund.reviewRequired() ? "REVIEW"
+                    : date.equals(fund.openingDate()) ? "BASELINE"
                     : value!=null ? value.dailyGain()==null ? "MISSING" : "COMPLETE"
-                    : SimulationEarnings.missingStatus(date,fund.lastDate(),calendar);
+                    : SimulationEarnings.missingFundStatus(date,fund,calendar);
             BigDecimal gain="COMPLETE".equals(status) ? value.dailyGain() : "NON_TRADING".equals(status) ? ZERO : null;
             details.add(new SimulationEarnings.Detail(p.fundCode(),p.fundName(),status,gain,
                     value==null || p.issue()!=null ? null : value.cumulativeGain()));
@@ -272,10 +274,14 @@ public class SimulationService {
         var calendar=earningsCalendar();
         var details=slice.stream().map(f -> {
             var d=values.get(f.fundCode());
-            String status=f.reviewRequired() ? "REVIEW" : d==null ? SimulationEarnings.missingStatus(date,f.lastDate(),calendar)
+            if(!SimulationEarnings.sourceContains(f,date)) d=null;
+            String status=f.reviewRequired() ? "REVIEW" : date.equals(f.openingDate()) ? "BASELINE"
+                    : d==null ? SimulationEarnings.missingFundStatus(date,f,calendar)
                     : d.dailyGain()==null ? "MISSING" : "COMPLETE";
+            String message="BASELINE".equals(status) ? "从期初持仓开始统计，当天收益不补算。"
+                    : f.valuationState()!=null && Set.of("REVIEW","RETRY").contains(f.valuationState().status()) ? f.valuationState().message() : null;
             return new SimulationEarnings.Detail(f.fundCode(),f.fundName(),status,
-                    "COMPLETE".equals(status) ? d.dailyGain() : null,d==null || f.reviewRequired() ? null : d.cumulativeGain());
+                    "COMPLETE".equals(status) ? d.dailyGain() : null,d==null || f.reviewRequired() ? null : d.cumulativeGain(),message);
         }).toList();
         return new Page<>(details,page,size,funds.size());
     }

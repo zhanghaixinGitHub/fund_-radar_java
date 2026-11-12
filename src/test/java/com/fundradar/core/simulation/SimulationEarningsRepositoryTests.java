@@ -24,7 +24,7 @@ class SimulationEarningsRepositoryTests {
         assertEquals("earnings_test",jdbc.queryForObject("select current_database()",String.class));
         jdbc.execute("CREATE TEMP TABLE sim_order(user_id uuid,fund_code text,fund_name text,trade_date date,status text)");
         jdbc.execute("CREATE TEMP TABLE sim_daily_valuation(user_id uuid,fund_code text,valuation_date date,market_value numeric,cumulative_gain numeric,daily_gain numeric,primary key(user_id,fund_code,valuation_date))");
-        jdbc.execute("CREATE TEMP TABLE sim_position(user_id uuid,fund_code text,snapshot text,issue text)");
+        jdbc.execute("CREATE TEMP TABLE sim_position(user_id uuid,fund_code text,snapshot text,issue text,opening_balance jsonb,valuation_state jsonb)");
         order(user,"000001","历史已清仓基金","CONFIRMED"); order(user,"000002","当前基金","CONFIRMED");
         order(user,"000003","已撤单基金","CANCELLED"); order(other,"999999","其他用户基金","CONFIRMED");
         daily(user,"000001",first,"0","5","5"); daily(user,"000002",first,"100","0","0");
