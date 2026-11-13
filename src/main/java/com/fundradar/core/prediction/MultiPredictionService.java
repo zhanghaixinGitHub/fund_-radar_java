@@ -66,6 +66,36 @@ public class MultiPredictionService {
         result.set("predictions",accepted);
         return result;
     }
+    /** 正式采用后的四周期分析独立读取，不把复盘、条件意见写成事前预测引用。 */
+    public JsonNode reviewV2(String code) {
+        owns(user(false),code);
+        var value=client.get("/funds/"+code+"/review-v2");
+        if(value==null || value.isNull()) return null;
+        if(!code.equals(value.path("fundCode").asText()) || !value.path("periods").isArray()
+                || value.path("periods").size()!=4) throw new IllegalStateException("第二版分析与当前基金不一致");
+        var expected=Set.of("T1","T5_V1","T20_V1","M6_V1");
+        var seen=new HashSet<String>();
+        for(var period:value.path("periods")) {
+            String horizon=period.path("horizonId").asText();
+            String kind=period.path("kind").asText();
+            if(!expected.contains(horizon) || !seen.add(horizon)
+                    || !Set.of("UP","DOWN","ABSTAIN").contains(period.path("decision").asText())
+                    || !Set.of("DATED_ANALYSIS","RETROSPECTIVE","CONDITIONAL_OUTLOOK").contains(kind)
+                    || !"LOW".equals(period.path("confidence").asText())
+                    || ("RETROSPECTIVE".equals(kind) || "CONDITIONAL_OUTLOOK".equals(kind))
+                       && !period.path("excludedFromAccuracy").asBoolean())
+                throw new IllegalStateException("第二版分析的周期或结果状态不一致");
+        }
+        return value;
+    }
+    /** 更新只登记新窗口的审阅请求，不用旧方向冒充本次已完成。 */
+    public JsonNode refreshReviewV2(String code) {
+        owns(user(true),code);
+        var value=client.post("/funds/"+code+"/review-v2/generate",Map.of());
+        if(value==null || !Set.of("PENDING_ANALYSIS","WAITING_FOR_NAV","AVAILABLE").contains(value.path("status").asText())
+                || value.path("summary").asText().isBlank()) throw new IllegalStateException("分析更新状态不完整");
+        return value;
+    }
     private void link(UUID user,String code,JsonNode prediction) {
         if(!code.equals(prediction.path("fundCode").asText())) throw new IllegalStateException("公共预测基金不匹配");
         db.sql("""

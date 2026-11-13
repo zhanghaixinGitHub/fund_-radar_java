@@ -14,6 +14,13 @@ public class MultiPredictionController {
     public MultiPredictionController(MultiPredictionService service) { this.service=service; }
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","no-store, private"); }
     @GetMapping("/watchlist/{code}/predictions") public ApiResponse<?> current(@PathVariable String code) { return ok(service.current(code)); }
+    @GetMapping("/watchlist/{code}/predictions/review-v2") public ApiResponse<?> reviewV2(@PathVariable String code) {
+        return ok(service.reviewV2(code));
+    }
+    @PostMapping("/watchlist/{code}/predictions/review-v2/generate")
+    public ApiResponse<?> refreshReviewV2(@PathVariable String code,@RequestBody(required=false) Map<String,Object> body) {
+        empty(body); return ok(service.refreshReviewV2(code));
+    }
     @GetMapping("/watchlist/{code}/predictions/history") public ApiResponse<?> history(@PathVariable String code,@RequestParam(required=false) String before,@RequestParam(required=false) UUID beforeId) { return ok(service.history(code,before,beforeId)); }
     @GetMapping("/watchlist/{code}/predictions/history-days")
     public ApiResponse<?> historyDays(@PathVariable String code,@RequestParam List<String> dates) {
