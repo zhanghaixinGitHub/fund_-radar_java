@@ -43,6 +43,21 @@ class PredictionReviewV2Tests {
         assertThrows(NoSuchElementException.class,()->service.reviewV2("013330"));
         verifyNoInteractions(client,database);
     }
+    @Test void historyRequiresOwnershipAndRetainsCursorWithoutWritingLinks() throws Exception {
+        assertThrows(AuthenticationRequiredException.class,()->service.reviewHistory("013330",null,null));
+        login(false);
+        assertThrows(NoSuchElementException.class,()->service.reviewHistory("013330",null,null));
+        verifyNoInteractions(client,database);
+        when(scope.follows(user,"013330")).thenReturn(true);
+        var expected=json.createObjectNode();expected.putArray("items").add(view());expected.putNull("nextCursor");
+        when(client.get("/funds/013330/review-v2/history")).thenReturn(expected);
+        assertEquals(expected,service.reviewHistory("013330",null,null));
+        assertThrows(IllegalArgumentException.class,()->service.reviewHistory("013330","2026-11-16T00:00:00Z",null));
+        var wrong=json.createObjectNode();wrong.putArray("items").addObject().put("fundCode","021740");
+        when(client.get("/funds/013330/review-v2/history")).thenReturn(wrong);
+        assertThrows(IllegalStateException.class,()->service.reviewHistory("013330",null,null));
+        verifyNoInteractions(database);
+    }
     @Test void readingRetainsKindAndDoesNotWriteForecastLinks() throws Exception {
         login(false);when(scope.follows(user,"013330")).thenReturn(true);
         var expected=view();when(client.get("/funds/013330/review-v2")).thenReturn(expected);

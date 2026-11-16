@@ -88,6 +88,20 @@ public class MultiPredictionService {
         }
         return value;
     }
+    /** 历史页必须读取第二版正式档案，不能只读旧版预测表或事后回看表。 */
+    public JsonNode reviewHistory(String code,String before,UUID beforeId) {
+        owns(user(false),code);
+        if((before==null)!=(beforeId==null)) throw new IllegalArgumentException("分析历史分页参数不完整");
+        if(before!=null) java.time.Instant.parse(before);
+        var result=client.get("/funds/"+code+"/review-v2/history"+(before==null?"":"?before="
+                +java.net.URLEncoder.encode(before,java.nio.charset.StandardCharsets.UTF_8)+"&beforeId="+beforeId));
+        if(!result.path("items").isArray()) throw new IllegalStateException("分析历史暂时无法读取");
+        for(var item:result.path("items")) {
+            if(!code.equals(item.path("fundCode").asText()) || !item.path("periods").isArray())
+                throw new IllegalStateException("分析历史与当前基金不一致");
+        }
+        return result;
+    }
     /** 更新只登记新窗口的审阅请求，不用旧方向冒充本次已完成。 */
     public JsonNode refreshReviewV2(String code) {
         owns(user(true),code);

@@ -21,6 +21,11 @@ public class MultiPredictionController {
     public ApiResponse<?> refreshReviewV2(@PathVariable String code,@RequestBody(required=false) Map<String,Object> body) {
         empty(body); return ok(service.refreshReviewV2(code));
     }
+    @GetMapping("/watchlist/{code}/predictions/review-v2/history")
+    public ApiResponse<?> reviewHistory(@PathVariable String code,@RequestParam(required=false) String before,
+                                       @RequestParam(required=false) UUID beforeId) {
+        return ok(service.reviewHistory(code,before,beforeId));
+    }
     @GetMapping("/watchlist/{code}/predictions/history") public ApiResponse<?> history(@PathVariable String code,@RequestParam(required=false) String before,@RequestParam(required=false) UUID beforeId) { return ok(service.history(code,before,beforeId)); }
     @GetMapping("/watchlist/{code}/predictions/history-days")
     public ApiResponse<?> historyDays(@PathVariable String code,@RequestParam List<String> dates) {
