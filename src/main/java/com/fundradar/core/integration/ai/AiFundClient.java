@@ -3,6 +3,7 @@ package com.fundradar.core.integration.ai;
 import com.fundradar.core.common.trace.TraceContext;
 import com.fundradar.core.fund.api.FundMaterialsResponse;
 import com.fundradar.core.fund.api.FundDocumentsResponse;
+import com.fundradar.core.fund.api.FundCompositionResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -64,6 +65,13 @@ public class AiFundClient {
     public com.fundradar.core.fund.api.FundRiskSummaryResponse getFundRiskSummary(String code) {
         return readMaterials(builder -> builder.path("/internal/v1/funds/{code}/risk-summary").build(code),
                 com.fundradar.core.fund.api.FundRiskSummaryResponse.class);
+    }
+
+    /** 一次批量读取公共构成资料；个人账户金额只在Java内加权。 */
+    public FundCompositionResponse getFundComposition(String codes) {
+        return readMaterials(ratingRestClient, builder -> builder.path("/internal/v1/funds/composition")
+                .queryParam("fundCodes", "{codes}").build(java.util.Map.of("codes", codes)),
+                FundCompositionResponse.class);
     }
 
     /** 读取已发布公共资料快照；参数来自服务端校验，不接受外部目标地址。 */
