@@ -217,7 +217,7 @@ public class DecisionServiceV2 {
         return item.evidence().replaceAll("[^。]*Java[^。]*。", "")
                 .replace("ACCUMULATED 口径", "累计净值口径");
     }
-    private String stableHash(JsonNode node) {
+    static String stableHash(JsonNode node) {
         if(node==null||node.isNull()) return Direction1dPolicy.hash("null");
         if(node.isObject()) {
             var sorted=new TreeMap<String,JsonNode>(); node.fields().forEachRemaining(e->sorted.put(e.getKey(),e.getValue()));

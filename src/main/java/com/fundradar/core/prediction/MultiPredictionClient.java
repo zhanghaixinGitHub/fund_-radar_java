@@ -23,6 +23,11 @@ public class MultiPredictionClient {
         client=builder.baseUrl(config.getBaseUrl()+"/internal/v1/multi-predictions").requestFactory(factory).build();
     }
     public JsonNode get(String path) { return request(path,null); }
+    /** 建议只读正式评分，不触发评分或预测任务；路径由服务内固定构造。 */
+    public JsonNode rating(String code) {
+        if(code==null || !code.matches("[0-9]{6}")) throw new IllegalArgumentException("基金代码不正确");
+        return request(config.getBaseUrl()+"/internal/v1/funds/"+code+"/rating",null);
+    }
     public JsonNode post(String path,Object body) { return request(path,body); }
     private JsonNode request(String path,Object body) {
         boolean idempotent=body==null || path.endsWith("/outcomes") ||

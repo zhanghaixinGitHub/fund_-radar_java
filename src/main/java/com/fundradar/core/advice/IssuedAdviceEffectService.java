@@ -28,13 +28,14 @@ public class IssuedAdviceEffectService {
         StrategyResearchService.validateRequest(new StrategyResearchService.Request(request.fundCode(),request.startDate(),request.endDate()),LocalDate.now(ZoneId.of("Asia/Shanghai")));
         var records=db.sql("""
           SELECT payload::text,content_hash FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c
+          AND strategy_version IN ('HOLDING_ADVICE_V2_EXPERIMENTAL','HOLDING_ADVICE_V3_THREE_STATE')
           AND generated_at>=CAST(:start AS date)-interval '2 days' AND generated_at<CAST(:end AS date)+interval '1 day'
           ORDER BY generated_at,report_id LIMIT 10001
           """).param("u",owner).param("c",request.fundCode()).param("start",request.startDate()).param("end",request.endDate()).query().listOfRows();
         if(records.size()>10000) throw new IllegalArgumentException("所选区间建议超过一万条，请缩短日期范围");
         ObjectNode result=json.createObjectNode();result.put("mode","ISSUED_ADVICE");result.put("fundCode",request.fundCode());
         result.put("startDate",request.startDate().toString());result.put("endDate",request.endDate().toString());
-        result.put("note","按当时实际发出的建议推进隔离模拟账本，与相同本金和费用的一直持有对照；不代表个人真实收益");
+        result.put("note","此处只评价此前按固定比例执行的旧建议；当前持仓综合建议尚不计入。旧建议与相同本金和费用的一直持有对照，不代表个人真实收益");
         if(records.isEmpty()) {result.put("status","NO_REPORTS");result.put("message","本区间尚无当时发出的建议，不能用今天模型补造");return result;}
         try {
             var input=client.get("/funds/"+request.fundCode()+"/ledger-inputs?start="+request.startDate()+"&end="+request.endDate());
