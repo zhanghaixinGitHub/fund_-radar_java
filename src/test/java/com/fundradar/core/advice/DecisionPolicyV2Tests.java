@@ -25,7 +25,7 @@ class DecisionPolicyV2Tests {
         assertEquals("REDUCE",policy.decide(input(true,"BALANCED",flat,-1.0)).decision());
         var value=input(true,"BALANCED",flat,null);
         var constrained=new Input(flat,null,value.facts(),value.missing(),true,"BALANCED",false,.2,-.01,
-                new PersonalRule("r",10.0,5.0),List.of());
+                new PersonalRule("r",0.10,-0.05),List.of());
         assertEquals("REDUCE",policy.decide(constrained).decision());
     }
     @Test void unknownAndLegacySignalsAreRejectedAndHashMatchesPython() {
@@ -53,10 +53,18 @@ class DecisionPolicyV2Tests {
         assertNull(policy.decide(input(true,"BALANCED",List.of(),null)).decision());
         var basic=input(true,"BALANCED",List.of(signal("T20_V1","UP")),1.0);
         var constrained=new Input(basic.predictions(),basic.trendRisk(),basic.facts(),basic.missing(),true,"BALANCED",false,
-                .15,-.01,new PersonalRule("r",10.0,5.0),List.of("仍需等待份额可卖"));
+                .15,-.01,new PersonalRule("r",0.10,-0.05),List.of("仍需等待份额可卖"));
         var result=policy.decide(constrained);
         assertEquals("REDUCE",result.decision());
         assertTrue(result.opposingEvidence().stream().anyMatch(v->v.contains("个人规则")));
+    }
+    @Test void holdingLossReminderUsesGainInsteadOfDrawdown() {
+        var basic=input(true,"BALANCED",List.of(signal("T20_V1","UP")),1.0);
+        var triggered=new Input(basic.predictions(),basic.trendRisk(),basic.facts(),basic.missing(),true,"BALANCED",false,
+                -.08,null,new PersonalRule("r",0.10,-0.08,"HOLDING_LOSS"),List.of());
+        var result=policy.decide(triggered);
+        assertEquals("REDUCE",result.decision());
+        assertTrue(result.opposingEvidence().stream().anyMatch(v->v.contains("持仓亏损提醒")));
     }
     @Test void factsOnlyMoveScoreWhenTheirDefinedFactorChanges() {
         var original=input(true,"BALANCED",List.of(signal("T20_V1","UP")),0.0);

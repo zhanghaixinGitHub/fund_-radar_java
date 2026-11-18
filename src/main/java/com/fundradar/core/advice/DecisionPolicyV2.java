@@ -32,7 +32,11 @@ public class DecisionPolicyV2 {
         }
     }
     public record Fact(String title,String content,String source,double factor) {}
-    public record PersonalRule(String ruleId,Double takeProfitPercent,Double reduceDrawdownPercent) {}
+    public record PersonalRule(String ruleId,Double takeProfitPct,Double downsidePct,String downsideBasis) {
+        public PersonalRule(String ruleId,Double takeProfitPct,Double downsidePct) {
+            this(ruleId,takeProfitPct,downsidePct,"DRAWDOWN");
+        }
+    }
     public record Input(List<Signal> predictions,Double trendRisk,List<Fact> facts,List<String> missing,
                         boolean held,String preference,boolean defaultPreference,Double holdingGainRate,
                         Double currentDrawdown,PersonalRule personalRule,List<String> constraints) {}
@@ -81,16 +85,18 @@ public class DecisionPolicyV2 {
         else if(score>=0) decision="HOLD";
         else if(score>config.path("sell_at_or_below").asDouble()) decision="REDUCE";
         else decision="SELL";
-        // 已确认止盈/回撤规则的单位为百分比；没有个人规则时不虚构风险偏好。
+        // 提醒阈值与持仓输入均使用小数比例；持仓亏损和高点回撤不能混用。
         var rule=input.personalRule();
         if(input.held() && rule!=null) {
-            boolean profit=rule.takeProfitPercent()!=null && input.holdingGainRate()!=null
-                    && input.holdingGainRate()*100>=rule.takeProfitPercent();
-            boolean drawdown=rule.reduceDrawdownPercent()!=null && input.currentDrawdown()!=null
-                    && -input.currentDrawdown()*100>=rule.reduceDrawdownPercent();
-            if(profit || drawdown) {
+            boolean profit=rule.takeProfitPct()!=null && input.holdingGainRate()!=null
+                    && input.holdingGainRate()>=rule.takeProfitPct();
+            boolean loss="HOLDING_LOSS".equals(rule.downsideBasis()) && rule.downsidePct()!=null
+                    && input.holdingGainRate()!=null && input.holdingGainRate()<=rule.downsidePct();
+            boolean drawdown=!"HOLDING_LOSS".equals(rule.downsideBasis()) && rule.downsidePct()!=null
+                    && input.currentDrawdown()!=null && input.currentDrawdown()<=rule.downsidePct();
+            if(profit || loss || drawdown) {
                 if(!"SELL".equals(decision)) decision="REDUCE";
-                against.add("已确认个人规则 "+rule.ruleId()+" 触发"+(profit?"止盈":"回撤减仓")+"；优先于默认实验动作。");
+                against.add("已确认个人规则 "+rule.ruleId()+" 触发"+(profit?"止盈":loss?"持仓亏损提醒":"高点回撤提醒")+"；优先于默认实验动作。");
             }
         }
         String summary="综合已接入信息，实验判断为"+actionLabel(decision)+"。";

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 持仓规则草案与已确认规则契约；阈值只产生复核提示，不承诺触发后走势，不构成投资建议。 */
+/** 系统参考与本人提醒设置契约；阈值只产生复核提示，不承诺触发后走势，不构成投资建议。 */
 public final class RuleTypes {
     private RuleTypes() {}
     public static final String VERSION="HOLDING_RULE_V1";
@@ -42,10 +42,15 @@ public final class RuleTypes {
                            Map<String,Object> ruleParams, UUID sourceDraftId, String ruleVersion,
                            String status, Instant confirmedAt, Instant supersededAt) {}
     public record RulesView(String fundCode, RuleView active, List<RuleView> history) {}
-    /** 确认请求：tier为标准档位；两个阈值缺省用草案分位值，微调限草案值±20%并记CUSTOM。 */
+    /** 标准档位沿用原有限微调；CUSTOM由本人直接填写，downsideBasis区分持仓亏损与高点回撤。 */
     public record ConfirmRequest(String tier,
                                  @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal takeProfitPct,
-                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reduceDrawdownPct) {}
+                                 @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal reduceDrawdownPct,
+                                 String downsideBasis) {
+        public ConfirmRequest(String tier,BigDecimal takeProfitPct,BigDecimal reduceDrawdownPct) {
+            this(tier,takeProfitPct,reduceDrawdownPct,"DRAWDOWN");
+        }
+    }
     /** 已归档草案行；fingerprint用于统计未变幂等。 */
     public record DraftRow(UUID draftId, Instant generatedAt, LocalDate statsCutoffDate,
                            Map<String,Object> stats, List<DraftTier> tiers, String fingerprint) {}

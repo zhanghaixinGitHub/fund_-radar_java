@@ -96,6 +96,13 @@ class HoldingAdvicePolicyTests {
         ((ObjectNode)p.path("position")).put("holdingGainRate","0.0012");
         assertEquals("HOLD",decide(p,rating(),review("UP","UP")).path("decision").asText());
     }
+    @Test void holdingLossReminderUsesPositionGainWithoutDrawdownFact() throws Exception {
+        var p=personal();p.putObject("rule").put("reduceDrawdownPct","-0.10").put("downsideBasis","HOLDING_LOSS");
+        ((ObjectNode)p.path("position")).put("holdingGainRate","-0.10");
+        var result=decide(p,rating(),review("UP","UP"));
+        assertEquals("REDUCE",result.path("decision").asText());
+        assertTrue(result.path("opposingEvidence").toString().contains("持仓亏损提醒"));
+    }
     @Test void actualDrawdownUsesSameDateAndNegativeRatio() throws Exception {
         var p=personal();p.putObject("rule").put("reduceDrawdownPct","-0.10");
         var d=json.createObjectNode();var item=d.putArray("items").addObject();item.put("item","DRAWDOWN").put("verdict","CHANGED").put("dataAsOfDate","2026-11-13");item.putObject("facts").put("current_drawdown","-0.12");

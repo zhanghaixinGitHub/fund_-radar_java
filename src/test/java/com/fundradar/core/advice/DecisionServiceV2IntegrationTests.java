@@ -154,6 +154,11 @@ class DecisionServiceV2IntegrationTests {
           """).param("id",id).param("u",owner).param("v",DecisionPolicyV2.LEGACY_VERSION)
                 .param("hash","a".repeat(64)).param("payload",original.toString()).update();
         assertEquals(original,service.history("123456",1,DecisionPolicyV2.LEGACY_VERSION).get(0));
+        var combined=service.history("123456",1,null);
+        assertEquals(Set.of(report.path("reportId").asText(),id.toString()),combined.stream()
+                .map(item->item.path("reportId").asText()).collect(java.util.stream.Collectors.toSet()));
+        service.outcomes("123456",1,null);
+        verify(client).post(eq("/funds/123456/outcomes"),eq(Map.of("predictionIds",Set.of("fixture-original","old-binary"))));
         assertEquals(report,service.latest("123456"));
         service.outcomes("123456",1,DecisionPolicyV2.LEGACY_VERSION);
         verify(client).post(eq("/funds/123456/outcomes"),eq(Map.of("predictionIds",Set.of("old-binary"))));

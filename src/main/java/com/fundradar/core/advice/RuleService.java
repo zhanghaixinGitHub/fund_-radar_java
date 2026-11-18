@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.*;
 import static com.fundradar.core.advice.RuleTypes.*;
 
-/** 规则只能由本人显式确认；系统不自动补写，未确认草案只是参考数字，不进入任何建议。 */
+/** 提醒只能由本人显式保存；系统不自动补写，系统参考不进入任何建议。 */
 @Service
 public class RuleService {
     private static final BigDecimal TOLERANCE=new BigDecimal("0.2");
@@ -87,29 +87,32 @@ public class RuleService {
         UUID user=reader(); owns(user,code);
         return new RulesView(code,repo.activeRule(user,code),repo.ruleHistory(user,code));
     }
-    /** 显式确认所选档位或微调值；同一参数重复确认不生成新版本；新确认取代旧规则并留痕。 */
+    /** 显式保存本人设置；同一参数重复保存不生成新版本，新设置取代旧设置并留痕。 */
     public RulesView confirm(String code,ConfirmRequest request) {
         UUID user=writer(); owns(user,code);
         var draft=repo.latestDraft(user,code);
-        if(draft==null) throw new SimulationException("SIM_INVALID","尚无可用草案，无法确认规则。");
+        if(draft==null && (request==null || !"CUSTOM".equals(request.tier())))
+            throw new SimulationException("SIM_INVALID","尚无系统参考，请直接填写并保存提醒数值。");
         var decided=decide(draft,request);
         var active=repo.activeRule(user,code);
         if(active!=null && active.tier().equals(decided.tier())
                 && active.takeProfitPct().compareTo(decided.takeProfit())==0
-                && active.reduceDrawdownPct().compareTo(decided.reduceDrawdown())==0)
+                && active.reduceDrawdownPct().compareTo(decided.reduceDrawdown())==0
+                && basis(active.ruleParams()).equals(decided.downsideBasis()))
             return new RulesView(code,active,repo.ruleHistory(user,code));
         Instant now=clock.instant();
         var params=new LinkedHashMap<String,Object>();
         params.put("sourceTier",request.tier());
-        params.put("draftTakeProfitPct",decided.draftProfit().toPlainString());
-        params.put("draftReduceDrawdownPct",decided.draftReduce().toPlainString());
+        if(decided.draftProfit()!=null) params.put("draftTakeProfitPct",decided.draftProfit().toPlainString());
+        if(decided.draftReduce()!=null) params.put("draftReduceDrawdownPct",decided.draftReduce().toPlainString());
         params.put("adjusted",decided.custom());
+        params.put("downsideBasis",decided.downsideBasis());
         RuleView confirmed=tx.execute(status-> {
             repo.lock(user,code);
             var current=repo.activeRule(user,code);
             if(current!=null) repo.supersede(current.ruleId(),now);
             var created=repo.insertRule(user,code,decided.tier(),decided.takeProfit(),decided.reduceDrawdown(),
-                    params,draft.draftId(),now);
+                    params,"CUSTOM".equals(request.tier())?null:draft.draftId(),now);
             positions.audit(user,"holding-rule-confirm",code+":"+created.ruleId());
             return created;
         });
@@ -126,24 +129,40 @@ public class RuleService {
         return new RulesView(code,null,repo.ruleHistory(user,code));
     }
     private record Decision(String tier,BigDecimal takeProfit,BigDecimal reduceDrawdown,
-                            BigDecimal draftProfit,BigDecimal draftReduce,boolean custom) {}
-    /** 微调限草案分位值±20%（恰好±20%允许），超出拒绝；有微调即记CUSTOM。 */
+                            BigDecimal draftProfit,BigDecimal draftReduce,boolean custom,String downsideBasis) {}
+    private static String basis(Map<String,Object> params) {
+        return params==null?"DRAWDOWN":Objects.toString(params.get("downsideBasis"),"DRAWDOWN");
+    }
+    /** CUSTOM不依赖系统参考，也不受档位微调限制；标准档位的历史接口仍沿用原±20%约束。 */
     private static Decision decide(DraftRow draft,ConfirmRequest request) {
-        if(request==null || request.tier()==null || !TIERS.contains(request.tier()))
-            throw new IllegalArgumentException("档位必须是 CONSERVATIVE、BALANCED 或 LOOSE。");
+        if(request==null || request.tier()==null) throw new IllegalArgumentException("请填写并保存提醒数值。");
+        if("CUSTOM".equals(request.tier())) {
+            String basis=request.downsideBasis()==null?"HOLDING_LOSS":request.downsideBasis();
+            if(!Set.of("HOLDING_LOSS","DRAWDOWN").contains(basis))
+                throw new IllegalArgumentException("下跌提醒口径必须是持仓亏损或高点回撤。");
+            BigDecimal profit=request.takeProfitPct(),reduce=request.reduceDrawdownPct();
+            if(profit==null || reduce==null) throw new IllegalArgumentException("请填写止盈和下跌提醒数值。");
+            if(profit.signum()<=0 || profit.compareTo(new BigDecimal("10"))>0
+                    || reduce.signum()>=0 || reduce.compareTo(BigDecimal.ONE.negate())<0)
+                throw new IllegalArgumentException("止盈需大于0%且不超过1000%，下跌提醒需在-100%到0%之间。");
+            return new Decision("CUSTOM",profit.setScale(4,RoundingMode.HALF_UP),reduce.setScale(4,RoundingMode.HALF_UP),
+                    null,null,true,basis);
+        }
+        if(!TIERS.contains(request.tier())) throw new IllegalArgumentException("系统参考档位不正确。");
+        if(!"DRAWDOWN".equals(request.downsideBasis())) throw new IllegalArgumentException("系统参考只适用于高点回撤口径。");
         var tier=draft.tiers().stream().filter(t->t.tier().equals(request.tier())).findFirst()
-                .orElseThrow(()->new IllegalArgumentException("草案中没有所选档位。"));
+                .orElseThrow(()->new IllegalArgumentException("系统参考中没有所选档位。"));
         BigDecimal draftReduce=tier.reduceDrawdownPct(),draftProfit=tier.takeProfitPct();
         BigDecimal reduce=request.reduceDrawdownPct()==null ? draftReduce : request.reduceDrawdownPct();
         BigDecimal profit=request.takeProfitPct()==null ? draftProfit : request.takeProfitPct();
         if(profit.signum()<0 || reduce.signum()>0)
-            throw new IllegalArgumentException("止盈线不能为负，减仓线（回撤）不能为正。");
+            throw new IllegalArgumentException("止盈线不能为负，回撤提醒不能为正。");
         boolean custom=reduce.compareTo(draftReduce)!=0 || profit.compareTo(draftProfit)!=0;
         if(custom && (!within(reduce,draftReduce) || !within(profit,draftProfit)))
             throw new IllegalArgumentException("微调幅度限草案分位值 ±20% 以内。");
         return new Decision(custom ? "CUSTOM" : request.tier(),
                 profit.setScale(4,RoundingMode.HALF_UP),reduce.setScale(4,RoundingMode.HALF_UP),
-                draftProfit,draftReduce,custom);
+                draftProfit,draftReduce,custom,"DRAWDOWN");
     }
     private static boolean within(BigDecimal value,BigDecimal base) {
         return value.subtract(base).abs().compareTo(base.abs().multiply(TOLERANCE))<=0;

@@ -152,15 +152,25 @@ public class HoldingAdvicePolicy {
             ruleTriggered=true; addUnique(result,"opposingEvidence","已达到本人确认的止盈线，应复核持仓；不自动卖出。");
         }
         var drawdown=number(rule,"reduceDrawdownPct");
-        // 回撤必须来自同一正式诊断的明确数值，不能从文字、亏损率或旧预测特征猜测。
-        Optional<BigDecimal> currentDrawdown=Optional.empty();
-        for(var item:diagnosis.path("items")) if("DRAWDOWN".equals(item.path("item").asText())
-                && navDate!=null && navDate.equals(date(item.path("dataAsOfDate").asText()))
-                && !"INSUFFICIENT".equals(item.path("verdict").asText())) currentDrawdown=number(item.path("facts"),"current_drawdown");
-        if(drawdown.isPresent()) {
-            if(currentDrawdown.isEmpty()) limits.add("已确认减仓线，但缺少可核实的当前回撤数值，不能宣称尚未触发。");
-            else if(currentDrawdown.get().compareTo(drawdown.get())<=0) {
-                ruleTriggered=true;addUnique(result,"opposingEvidence","已达到本人确认的回撤减仓线，应复核持仓；不自动卖出。");
+        String downsideBasis=rule.path("downsideBasis").asText("DRAWDOWN");
+        if("HOLDING_LOSS".equals(downsideBasis)) {
+            if(drawdown.isPresent()) {
+                if(gain.isEmpty()) limits.add("已设置持仓亏损提醒，但缺少可核实的持仓收益率，不能宣称尚未触发。");
+                else if(gain.get().compareTo(drawdown.get())<=0) {
+                    ruleTriggered=true;addUnique(result,"opposingEvidence","已达到本人设置的持仓亏损提醒，应复核持仓；不自动卖出。");
+                }
+            }
+        } else {
+            // 回撤必须来自同一正式诊断的明确数值，不能从文字、亏损率或旧预测特征猜测。
+            Optional<BigDecimal> currentDrawdown=Optional.empty();
+            for(var item:diagnosis.path("items")) if("DRAWDOWN".equals(item.path("item").asText())
+                    && navDate!=null && navDate.equals(date(item.path("dataAsOfDate").asText()))
+                    && !"INSUFFICIENT".equals(item.path("verdict").asText())) currentDrawdown=number(item.path("facts"),"current_drawdown");
+            if(drawdown.isPresent()) {
+                if(currentDrawdown.isEmpty()) limits.add("已设置高点回撤提醒，但缺少可核实的当前回撤数值，不能宣称尚未触发。");
+                else if(currentDrawdown.get().compareTo(drawdown.get())<=0) {
+                    ruleTriggered=true;addUnique(result,"opposingEvidence","已达到本人设置的高点回撤提醒，应复核持仓；不自动卖出。");
+                }
             }
         }
         if(ruleTriggered && safePosition) {

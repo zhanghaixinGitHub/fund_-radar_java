@@ -55,11 +55,12 @@ public class DecisionServiceV2 {
     }
     public List<JsonNode> history(String code,int page,String version) {
         UUID user=user(false); owns(user,code);
-        if(page<1||page>10000||!SUPPORTED_VERSIONS.contains(version)) throw new IllegalArgumentException("版本或页码不正确");
+        if(page<1||page>10000||(version!=null&&!SUPPORTED_VERSIONS.contains(version))) throw new IllegalArgumentException("版本或页码不正确");
         return db.sql("""
-          SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version=:v
-          ORDER BY generated_at DESC,report_id LIMIT 20 OFFSET :offset
-          """).param("u",user).param("c",code).param("v",version).param("offset",(page-1)*20)
+          SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c
+          AND (:v IS NULL OR strategy_version=:v)
+          ORDER BY generated_at DESC,report_id DESC LIMIT 20 OFFSET :offset
+          """).param("u",user).param("c",code).param("v",version,java.sql.Types.VARCHAR).param("offset",(page-1)*20)
                 .query(String.class).list().stream().map(this::decode).toList();
     }
     public JsonNode report(String code,UUID id) {
@@ -156,7 +157,8 @@ public class DecisionServiceV2 {
             ruleSnapshot=json.valueToTree(personal);
             PersonalRule rule=personal==null?null:new PersonalRule(personal.ruleId().toString(),
                     personal.takeProfitPct()==null?null:personal.takeProfitPct().doubleValue(),
-                    personal.reduceDrawdownPct()==null?null:personal.reduceDrawdownPct().doubleValue());
+                    personal.reduceDrawdownPct()==null?null:personal.reduceDrawdownPct().doubleValue(),
+                    Objects.toString(personal.ruleParams().get("downsideBasis"),"DRAWDOWN"));
             if(position!=null && position.frozenShares().signum()>0) constraints.add("部分份额尚冻结，动作不等于立即全部可执行");
             var knownTotal=portfolio.stream().map(SimulationTypes.Position::marketValue).filter(Objects::nonNull)
                     .reduce(java.math.BigDecimal.ZERO,java.math.BigDecimal::add);

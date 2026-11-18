@@ -168,6 +168,25 @@ class RuleIntegrationTests {
         assertEquals("NOT_APPLICABLE",service.draft("006730").status());
         assertThrows(SimulationException.class,()->service.confirm("006730",new ConfirmRequest("BALANCED",null,null)));
     }
+    @Test void user_can_save_custom_profit_and_holding_loss_reminder_without_system_draft() {
+        var confirmed=service.confirm("006730",new ConfirmRequest("CUSTOM",new BigDecimal("0.1800"),
+                new BigDecimal("-0.0800"),"HOLDING_LOSS"));
+        var rule=confirmed.active();
+        assertEquals("CUSTOM",rule.tier());
+        assertEquals(0,new BigDecimal("0.1800").compareTo(rule.takeProfitPct()));
+        assertEquals(0,new BigDecimal("-0.0800").compareTo(rule.reduceDrawdownPct()));
+        assertEquals("HOLDING_LOSS",rule.ruleParams().get("downsideBasis"));
+        assertNull(rule.sourceDraftId());
+        assertEquals(0,draftCount());
+        var repeated=service.confirm("006730",new ConfirmRequest("CUSTOM",new BigDecimal("0.18"),
+                new BigDecimal("-0.08"),"HOLDING_LOSS"));
+        assertEquals(rule.ruleId(),repeated.active().ruleId());
+        assertEquals(1,audits("holding-rule-confirm"));
+        assertThrows(IllegalArgumentException.class,()->service.confirm("006730",new ConfirmRequest("CUSTOM",
+                new BigDecimal("0.18"),new BigDecimal("0.08"),"HOLDING_LOSS")));
+        assertThrows(IllegalArgumentException.class,()->service.confirm("006730",new ConfirmRequest("CUSTOM",
+                new BigDecimal("0.18"),new BigDecimal("-1.01"),"HOLDING_LOSS")));
+    }
     @Test void cross_user_access_is_rejected() {
         when(client.read("006730")).thenReturn(available(LocalDate.of(2026,9,10),"a"));
         service.generate("006730");

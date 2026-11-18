@@ -177,7 +177,9 @@ public class HoldingAdviceService {
         ObjectNode result=decode(value);var raw=result.path("rule");
         if(!raw.isNull()) {
             var rule=json.createObjectNode();rule.set("ruleId",raw.path("rule_id"));rule.set("takeProfitPct",raw.path("take_profit_pct"));
-            rule.set("reduceDrawdownPct",raw.path("reduce_drawdown_pct"));rule.set("source",raw);result.set("rule",rule);
+            rule.set("reduceDrawdownPct",raw.path("reduce_drawdown_pct"));
+            rule.put("downsideBasis",raw.path("rule_params").path("downsideBasis").asText("DRAWDOWN"));
+            rule.set("source",raw);result.set("rule",rule);
         }
         var position=result.path("position");
         // 旧持仓序列化的LocalDate为数组，统一为业务日期字符串再参与判断。
