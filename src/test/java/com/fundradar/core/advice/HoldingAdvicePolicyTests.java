@@ -11,7 +11,9 @@ class HoldingAdvicePolicyTests {
     private final HoldingAdvicePolicy policy=new HoldingAdvicePolicy(json);
     private final Instant now=Instant.parse("2026-11-16T09:20:00Z");
     private ObjectNode personal() throws Exception {return (ObjectNode)json.readTree("""
-        {"position":{"shares":"100","availableShares":"100","frozenShares":"0","holdingGainRate":"0.12","navDate":"2026-11-13"},"orders":[],"plans":[],"rule":null}
+        {"position":{"shares":"100","availableShares":"100","frozenShares":"0","holdingGainRate":"0.12","navDate":"2026-11-13"},"orders":[],"plans":[],"rule":null,"preference":"BALANCED",
+        "portfolioComplete":true,"portfolio":[{"fundCode":"123456","cost":"1000","holdingGain":"120","marketValue":"1120","navDate":"2026-11-13"}],
+        "funding":{"status":"ACTIVE","confirmedAt":"2026-11-15T10:00:00+08:00","input":{"requiredAmount":"0","willingLossPct":"20","affordableLossAmount":"200"}}}
         """);}
     private ObjectNode rating() throws Exception {return (ObjectNode)json.readTree("""
         {"fundCode":"123456","status":"SCORED","score":"70","asOfDate":"2026-10-30","validUntil":"2026-12-01T00:00:00+08:00","dimensions":[{"name":"风险","explanation":"有波动风险"}],"limitations":[]}
@@ -27,6 +29,33 @@ class HoldingAdvicePolicyTests {
         return root;
     }
     private ObjectNode decide(ObjectNode p,ObjectNode r,ObjectNode v) {return policy.decide("123456",p,r,v,json.nullNode(),now);}
+    @Test void confirmedFundingDateArrayMatchesIsoDate() throws Exception {
+        var iso=personal();var input=(ObjectNode)iso.path("funding").path("input");
+        input.put("requiredAmount","10000").put("useDate","2027-01-31");
+        var array=iso.deepCopy();((ObjectNode)array.path("funding").path("input"))
+            .set("useDate",json.readTree("[2027,1,31]"));
+        var expected=decide(iso,rating(),review("UP","UP"));
+        var actual=decide(array,rating(),review("UP","UP"));
+        assertEquals("HOLD",actual.path("decision").asText());
+        assertEquals(expected.path("missingOptionalFactors"),actual.path("missingOptionalFactors"));
+        assertEquals(expected.path("personalAssessment"),actual.path("personalAssessment"));
+    }
+    @Test void nearTermFundingDateArrayStillPreventsUnsupportedHolding() throws Exception {
+        var p=personal();var input=(ObjectNode)p.path("funding").path("input");
+        input.put("requiredAmount","10000");input.set("useDate",json.readTree("[2026,11,20]"));
+        var actual=decide(p,rating(),review("UP","UP"));
+        assertTrue(actual.path("decision").isNull());
+        assertTrue(actual.path("missingOptionalFactors").toString().contains("现金覆盖及赎回到账日期"));
+    }
+    @Test void malformedFundingDatesRemainUnknown() throws Exception {
+        for(String value:new String[]{"[2026,2,30]","[2027,1]","[2027,1,31,0]","[2027,1.5,31]","[\"2027\",1,31]","null"}) {
+            var p=personal();var input=(ObjectNode)p.path("funding").path("input");
+            input.put("requiredAmount","10000");input.set("useDate",json.readTree(value));
+            var actual=decide(p,rating(),review("UP","UP"));
+            assertTrue(actual.path("decision").isNull(),value);
+            assertTrue(actual.path("missingOptionalFactors").toString().contains("用款日期尚未确认"),value);
+        }
+    }
     @Test void bothDownReduceWithoutSellingAll() throws Exception {
         var result=decide(personal(),rating(),review("DOWN","DOWN"));assertEquals("REDUCE",result.path("decision").asText());assertFalse(result.has("score"));
     }
@@ -57,9 +86,9 @@ class HoldingAdvicePolicyTests {
     }
     @Test void pendingSellAndFrozenSharesPreventRepeatedSelling() throws Exception {
         var p=personal();p.withArray("orders").addObject().put("side","SELL");
-        assertEquals("HOLD",decide(p,rating(),review("DOWN","DOWN")).path("decision").asText());
+        assertTrue(decide(p,rating(),review("DOWN","DOWN")).path("decision").isNull());
         p=personal();((ObjectNode)p.path("position")).put("availableShares","0").put("frozenShares","100");
-        assertEquals("HOLD",decide(p,rating(),review("DOWN","DOWN")).path("decision").asText());
+        assertTrue(decide(p,rating(),review("DOWN","DOWN")).path("decision").isNull());
     }
     @Test void confirmedRuleUsesDecimalRatioNotPercent() throws Exception {
         var p=personal();p.putObject("rule").put("takeProfitPct","0.10");
@@ -82,5 +111,97 @@ class HoldingAdvicePolicyTests {
     }
     @Test void clearedHoldingNeverGetsNewAction() throws Exception {
         var p=personal();((ObjectNode)p.path("position")).put("shares","0");assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+    }
+
+    private ObjectNode withHalf(ObjectNode review,String kind,String direction) {
+        var period=((ObjectNode)review.path("periods").get(1)).deepCopy();
+        period.put("horizonId","M6_V1").put("kind",kind).put("decision",direction).put("endDate","2027-05-14");
+        review.withArray("periods").add(period);return review;
+    }
+    @Test void preferencesActuallyChangeTheSameConflictDecision() throws Exception {
+        var p=personal();var v=review("DOWN","UP");
+        p.put("preference","SHORT");assertEquals("REDUCE",decide(p,rating(),v).path("decision").asText());
+        p.put("preference","BALANCED");assertEquals("HOLD",decide(p,rating(),v).path("decision").asText());
+        p.put("preference","LONG");withHalf(v,"DATED_ANALYSIS","UP");
+        assertEquals("HOLD",decide(p,rating(),v).path("decision").asText());
+    }
+    @Test void longPreferenceRequiresRealHalfYearEvidenceAndBothPrimaryDownToReduce() throws Exception {
+        var p=personal();p.put("preference","LONG");
+        assertTrue(decide(p,rating(),review("DOWN","DOWN")).path("decision").isNull());
+        assertTrue(decide(p,rating(),withHalf(review("DOWN","DOWN"),"CONDITIONAL_OUTLOOK","UP")).path("decision").isNull());
+        assertEquals("HOLD",decide(p,rating(),withHalf(review("DOWN","DOWN"),"DATED_ANALYSIS","UP")).path("decision").asText());
+        assertEquals("REDUCE",decide(p,rating(),withHalf(review("UP","DOWN"),"DATED_ANALYSIS","DOWN")).path("decision").asText());
+    }
+    @Test void missingPersonalPreferenceIsNotAssumedBalanced() throws Exception {
+        var p=personal();p.remove("preference");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+    }
+    @Test void absentRevokedAndFutureFundingStopHoldingButPreserveRiskReduction() throws Exception {
+        for(String state:new String[]{"ABSENT","REVOKED","FUTURE"}) {
+            var p=personal();
+            if(state.equals("ABSENT")) p.remove("funding");
+            else if(state.equals("REVOKED")) ((ObjectNode)p.path("funding")).put("status","REVOKED");
+            else ((ObjectNode)p.path("funding")).put("confirmedAt","2026-11-17T10:00:00+08:00");
+            assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+            var reduce=decide(p,rating(),review("DOWN","DOWN"));
+            assertEquals("REDUCE",reduce.path("decision").asText());assertEquals("QUALIFIED",reduce.path("adviceState").asText());
+        }
+    }
+    @Test void upcomingUseOfFundsBlocksHoldingEvenWhenBothPeriodsAreUp() throws Exception {
+        var p=personal();var input=(ObjectNode)p.path("funding").path("input");
+        input.put("requiredAmount","500").put("useDate","2026-11-20");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+        input.put("useDate","2026-12-01");assertEquals("HOLD",decide(p,rating(),review("UP","UP")).path("decision").asText());
+        input.remove("useDate");assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+        input.put("requiredAmount","0");assertEquals("HOLD",decide(p,rating(),review("UP","UP")).path("decision").asText());
+    }
+    @Test void unconfirmedUseAmountAndOverdueReviewBlockHolding() throws Exception {
+        var p=personal();var input=(ObjectNode)p.path("funding").path("input");
+        input.remove("requiredAmount");assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+        input.put("requiredAmount","0").put("reviewIntervalDays",1);
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+    }
+    @Test void actualAccountLossTriggersConfirmedAmountOrPercentLimitDespiteBullishViews() throws Exception {
+        var p=personal();var holding=(ObjectNode)p.path("portfolio").get(0);holding.put("holdingGain","-210");
+        ((ObjectNode)p.path("funding").path("input")).put("willingLossPct","50");
+        assertEquals("REDUCE",decide(p,rating(),review("UP","UP")).path("decision").asText());
+        holding.put("holdingGain","-110");((ObjectNode)p.path("funding").path("input")).put("willingLossPct","10").put("affordableLossAmount","500");
+        assertEquals("REDUCE",decide(p,rating(),review("UP","UP")).path("decision").asText());
+        holding.put("holdingGain","-99");assertEquals("HOLD",decide(p,rating(),review("UP","UP")).path("decision").asText());
+    }
+    @Test void incompleteAccountValuesCannotClaimLossCapacityPassed() throws Exception {
+        var p=personal();((ObjectNode)p.path("portfolio").get(0)).remove("cost");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+        p=personal();((ObjectNode)p.path("portfolio").get(0)).put("navDate","2026-11-12");
+        var second=p.withArray("portfolio").addObject();second.put("cost","100").put("holdingGain","0");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+    }
+    @Test void fundingLimitsCannotBypassClearedHoldingOrFrozenSellRestrictions() throws Exception {
+        var p=personal();((ObjectNode)p.path("portfolio").get(0)).put("holdingGain","-300");
+        ((ObjectNode)p.path("position")).put("availableShares","0");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+        ((ObjectNode)p.path("position")).put("shares","0");
+        assertTrue(decide(p,rating(),review("UP","UP")).path("decision").isNull());
+    }
+
+    @Test void oneKnownLossLimitRemainsBindingWhenTheOtherIsUnknown() throws Exception {
+        var p=personal();((ObjectNode)p.path("portfolio").get(0)).put("holdingGain","-300");
+        ((ObjectNode)p.path("funding").path("input")).remove("willingLossPct");
+        var result=decide(p,rating(),review("UP","UP"));
+        assertEquals("REDUCE",result.path("decision").asText());assertEquals("QUALIFIED",result.path("adviceState").asText());
+    }
+
+    @Test void knownPersonalLossLimitDoesNotDisappearWhenPublicInputsAreMissing() throws Exception {
+        var p=personal();((ObjectNode)p.path("portfolio").get(0)).put("holdingGain","-300");
+        var result=policy.decide("123456",p,json.nullNode(),json.nullNode(),json.nullNode(),now);
+        assertEquals("REDUCE",result.path("decision").asText());assertEquals("QUALIFIED",result.path("adviceState").asText());
+    }
+
+    @Test void latestKnownValuationsMatchPortfolioPageWithoutInventingSameDayDrawdown() throws Exception {
+        var p=personal();var second=p.withArray("portfolio").addObject();
+        second.put("cost","100").put("holdingGain","0").put("navDate","2026-11-12");
+        var result=decide(p,rating(),review("UP","UP"));
+        assertEquals("HOLD",result.path("decision").asText());
+        assertTrue(result.path("personalAssessment").asText().contains("各基金净值日期不同"));
     }
 }

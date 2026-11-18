@@ -32,7 +32,7 @@ public class HoldingAdviceService {
     }
     public JsonNode generate(String code) {
         UUID user=owner(true);legacy.owns(user,code);
-        if(!held(personal(user,code))) return legacy.generate(code);
+        if(!held(personal(user,code))) throw new IllegalArgumentException("当前没有该基金正份额持仓，请查看历史建议。");
         return generateFor(user,code);
     }
     public JsonNode generateFor(UUID user,String code) {
@@ -59,7 +59,8 @@ public class HoldingAdviceService {
         catch(RuntimeException e){errors.add("补充诊断暂时无法读取，未参与本次判断。");}
         var report=policy.decide(code,before,rating,review,diagnosis,clock.instant());
         for(String error:errors) report.withArray("missingOptionalFactors").add(error);
-        if(!errors.isEmpty() && rating.isNull() && review.isNull()) {
+        if(!errors.isEmpty() && report.hasNonNull("decision")) report.put("adviceState","QUALIFIED");
+        if(!errors.isEmpty() && rating.isNull() && review.isNull() && !report.hasNonNull("decision")) {
             report.put("generationStatus","FAILED");report.put("adviceState","FAILED");
             report.putNull("decision");report.put("summary","本次资料读取失败，原建议仍保留，可稍后重试。");
         }
@@ -76,8 +77,9 @@ public class HoldingAdviceService {
             // 订单、定投、估值共用账号锁；个人规则共用既有规则锁。没有插入账号或改账。
             db.sql("SELECT user_id FROM sim_account WHERE user_id=:u FOR UPDATE").param("u",user).query(UUID.class).single();
             db.sql("SELECT pg_advisory_xact_lock(721109,hashtext(:key))").param("key",user+":"+code).query((r,n)->0).list();
+            db.sql("SELECT pg_advisory_xact_lock(721131,hashtext(:user))").param("user",user.toString()).query((r,n)->0).list();
             var current=personal(user,code);
-            if(!before.equals(current) || !held(current)) throw new IllegalArgumentException("持仓或操作安排已变化，请重新生成建议。");
+            if(!before.equals(current) || !held(current)) throw new IllegalArgumentException("持仓、投资偏好或资金安排已变化，请重新生成建议。");
             db.sql("""
                 INSERT INTO portfolio_decision_report(report_id,user_id,fund_code,generated_at,strategy_version,
                   generation_status,decision,input_hash,content_hash,payload)
@@ -95,6 +97,15 @@ public class HoldingAdviceService {
         UUID user=owner(false);legacy.owns(user,code);
         var saved=latestFor(user,code);
         if(saved==null) return legacyView(legacy.latest(code));
+        return currentInputApplicability(saved,user,code);
+    }
+    /** 内部只读回查：仍核本人持仓/偏好、有效期和当前公共输入，不生成新报告。 */
+    public JsonNode currentFor(UUID user,String code) {
+        legacy.owns(user,code);
+        var saved=latestFor(user,code);
+        return saved==null?null:currentInputApplicability(saved,user,code);
+    }
+    private JsonNode currentInputApplicability(JsonNode saved,UUID user,String code) {
         ObjectNode view=(ObjectNode)applicability(saved,user,code);
         if("CURRENT".equals(view.path("applicability").asText())) {
             try {
@@ -112,30 +123,32 @@ public class HoldingAdviceService {
         UUID user=owner(false);
         var result=new TreeMap<String,JsonNode>();
         for(var old:legacy.latestMine()) result.put(old.path("fundCode").asText(),legacyView(old));
-        for(var row:db.sql("SELECT DISTINCT ON(fund_code) payload::text FROM portfolio_decision_report WHERE user_id=:u AND strategy_version=:v ORDER BY fund_code,generated_at DESC,report_id DESC")
-                .param("u",user).param("v",HoldingAdvicePolicy.VERSION).query(String.class).list()) {
-            var report=decode(row);String code=report.path("fundCode").asText();result.put(code,applicability(report,user,code));
+        for(var row:db.sql("SELECT DISTINCT ON(fund_code) payload::text FROM portfolio_decision_report WHERE user_id=:u AND strategy_version IN (:v,:previous) ORDER BY fund_code,generated_at DESC,report_id DESC")
+                .param("u",user).param("v",HoldingAdvicePolicy.VERSION).param("previous",HoldingAdvicePolicy.PREVIOUS_VERSION).query(String.class).list()) {
+            var report=decode(row);String code=report.path("fundCode").asText();result.put(code,currentInputApplicability(report,user,code));
         }
         return List.copyOf(result.values());
     }
-    public List<JsonNode> history(String code,int page) {
+    public List<JsonNode> history(String code,int page) { return history(code,page,HoldingAdvicePolicy.VERSION); }
+    public List<JsonNode> history(String code,int page,String version) {
         UUID user=owner(false);legacy.owns(user,code);
-        if(page<1 || page>10000) throw new IllegalArgumentException("页码不正确");
+        if(page<1 || page>10000 || !Set.of(HoldingAdvicePolicy.VERSION,HoldingAdvicePolicy.PREVIOUS_VERSION).contains(version)) throw new IllegalArgumentException("页码不正确");
         return db.sql("SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version=:v ORDER BY generated_at DESC,report_id DESC LIMIT 20 OFFSET :offset")
-            .param("u",user).param("c",code).param("v",HoldingAdvicePolicy.VERSION).param("offset",(page-1)*20)
+            .param("u",user).param("c",code).param("v",version).param("offset",(page-1)*20)
             .query(String.class).list().stream().<JsonNode>map(this::decode).toList();
     }
     private JsonNode latestFor(UUID user,String code) {
-        return db.sql("SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version=:v ORDER BY generated_at DESC,report_id DESC LIMIT 1")
-            .param("u",user).param("c",code).param("v",HoldingAdvicePolicy.VERSION).query(String.class).optional().map(this::decode).orElse(null);
+        return db.sql("SELECT payload::text FROM portfolio_decision_report WHERE user_id=:u AND fund_code=:c AND strategy_version IN (:v,:previous) ORDER BY generated_at DESC,report_id DESC LIMIT 1")
+            .param("u",user).param("c",code).param("v",HoldingAdvicePolicy.VERSION).param("previous",HoldingAdvicePolicy.PREVIOUS_VERSION).query(String.class).optional().map(this::decode).orElse(null);
     }
     private JsonNode legacyView(JsonNode original) {
         if(original==null) return null;
         ObjectNode result=original.deepCopy();result.put("applicability","LEGACY");result.put("applicabilityMessage","这是旧规则保存的建议，请重新生成后查看当前判断。");return result;
     }
     private JsonNode applicability(JsonNode original,UUID user,String code) {
+        if(!HoldingAdvicePolicy.VERSION.equals(original.path("strategyVersion").asText())) return legacyView(original);
         ObjectNode view=original.deepCopy();String state="CURRENT",message="";
-        if(!original.path("personalSnapshot").equals(personal(user,code))) {state="CHANGED";message="持仓或操作安排已变化，请重新评估。";}
+        if(!original.path("personalSnapshot").equals(personal(user,code))) {state="CHANGED";message="持仓、投资偏好或资金安排已变化，请重新评估。";}
         else if(!Instant.parse(original.path("validUntil").asText()).isAfter(clock.instant())) {state="EXPIRED";message="这份建议的适用时间已过，请重新评估。";}
         view.put("applicability",state);view.put("applicabilityMessage",message);return view;
     }
@@ -147,6 +160,8 @@ public class HoldingAdviceService {
         String value=db.sql("""
             SELECT jsonb_build_object(
               'preference',(SELECT preference FROM user_strategy_preference WHERE user_id=:u),
+              'funding',(SELECT jsonb_build_object('preferenceId',f.preference_id,'status',f.status,'input',f.payload,'confirmedAt',f.confirmed_at)
+                FROM account_funding_preference f WHERE f.user_id=:u ORDER BY confirmed_at DESC,revision DESC,scope DESC,preference_id DESC LIMIT 1),
               'position',(SELECT p.snapshot || jsonb_build_object('issue',p.issue,
                 'frozenShares',COALESCE((SELECT sum(o.shares) FROM sim_order o WHERE o.user_id=:u AND o.fund_code=:c AND o.status='PENDING' AND o.side='SELL'),0)::text,
                 'availableShares',GREATEST(0,(p.snapshot->>'shares')::numeric-COALESCE((SELECT sum(o.shares) FROM sim_order o WHERE o.user_id=:u AND o.fund_code=:c AND o.status='PENDING' AND o.side='SELL'),0))::text)
@@ -155,7 +170,7 @@ public class HoldingAdviceService {
                 FROM sim_order o WHERE o.user_id=:u AND o.fund_code=:c AND o.status='PENDING'),'[]'::jsonb),
               'plans',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.plan_id) FROM sim_plan p WHERE p.user_id=:u AND p.fund_code=:c AND p.status='ACTIVE'),'[]'::jsonb),
               'rule',(SELECT to_jsonb(r) FROM holding_rule_profile r WHERE r.user_id=:u AND r.fund_code=:c AND r.status='ACTIVE'),
-              'portfolio',COALESCE((SELECT jsonb_agg(jsonb_build_object('fundCode',p.fund_code,'marketValue',p.snapshot->'marketValue') ORDER BY p.fund_code)
+              'portfolio',COALESCE((SELECT jsonb_agg(jsonb_build_object('fundCode',p.fund_code,'marketValue',p.snapshot->'marketValue','cost',p.snapshot->'cost','holdingGain',p.snapshot->'holdingGain','navDate',p.snapshot->'navDate','issue',p.issue) ORDER BY p.fund_code)
                 FROM sim_position p WHERE p.user_id=:u AND (p.snapshot->>'shares')::numeric>0),'[]'::jsonb)
             )::text
             """).param("u",user).param("c",code).query(String.class).single();
@@ -169,13 +184,18 @@ public class HoldingAdviceService {
         if(position.isObject() && position.path("navDate").isArray() && position.path("navDate").size()==3) {
             var d=position.path("navDate");((ObjectNode)position).put("navDate",LocalDate.of(d.get(0).asInt(),d.get(1).asInt(),d.get(2).asInt()).toString());
         }
+        for(var item:result.path("portfolio")) {
+            var d=item.path("navDate");
+            if(d.isArray() && d.size()==3) ((ObjectNode)item).put("navDate",LocalDate.of(d.get(0).asInt(),d.get(1).asInt(),d.get(2).asInt()).toString());
+        }
         BigDecimal total=BigDecimal.ZERO;boolean complete=true;
         for(var item:result.path("portfolio")) {
-            if(!item.hasNonNull("marketValue")) complete=false;
+            if(!item.hasNonNull("marketValue") || !item.path("issue").asText("").isBlank()) complete=false;
             else total=total.add(new BigDecimal(item.path("marketValue").asText()));
         }
         result.put("portfolioComplete",complete);
-        if(total.signum()>0 && position.hasNonNull("marketValue")) result.put("knownWeightPct",new BigDecimal(position.path("marketValue").asText()).multiply(BigDecimal.valueOf(100)).divide(total,2,RoundingMode.HALF_UP).toPlainString());
+        if(complete) result.put("portfolioMarketValue",total.toPlainString());
+        if(complete && total.signum()>0 && position.hasNonNull("marketValue")) result.put("knownWeightPct",new BigDecimal(position.path("marketValue").asText()).multiply(BigDecimal.valueOf(100)).divide(total,2,RoundingMode.HALF_UP).toPlainString());
         return result;
     }
     private ObjectNode decode(String value) {

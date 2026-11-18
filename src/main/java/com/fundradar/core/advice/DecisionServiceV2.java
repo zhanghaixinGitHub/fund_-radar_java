@@ -89,8 +89,10 @@ public class DecisionServiceV2 {
                 .query(String.class).optional().orElse(null);
         return Map.of("preference",value==null?"BALANCED":value,"defaultPreference",value==null,"strategyVersion",VERSION);
     }
+    @org.springframework.transaction.annotation.Transactional
     public Map<String,Object> savePreference(String preference) {
         UUID user=user(true);
+        db.sql("SELECT pg_advisory_xact_lock(721131,hashtext(:user))").param("user",user.toString()).query((r,n)->0).list();
         if(!Set.of("SHORT","BALANCED","LONG").contains(preference)) throw new IllegalArgumentException("策略偏好不正确");
         db.sql("""
           INSERT INTO user_strategy_preference(user_id,preference) VALUES(:u,:p)

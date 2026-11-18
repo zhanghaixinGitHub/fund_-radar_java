@@ -45,9 +45,9 @@ class AccountFundingIntegrationTests {
         assertNull(saved.input().willingLossPct());assertNull(saved.input().requiredAmount());
         assertEquals(1,service.read(Scope.CONFIRMED,1).history().size());
     }
-    @Test void otherAccountAndSimulationCannotReadOrReplaceRealSettings() {
+    @Test void legacyScopesShareOneAccountButOtherUsersRemainIsolated() {
         var first=service.change(Scope.CONFIRMED,change(0,new Input("测试用途",null,new BigDecimal("200"),null,null,null)),false);
-        assertNull(service.read(Scope.SIMULATED,1).current());
+        assertEquals(first,service.read(Scope.SIMULATED,1).current());
         login(other,true);
         assertNull(service.read(Scope.CONFIRMED,1).current());
         assertThrows(SimulationException.class,()->service.change(Scope.CONFIRMED,change(first.revision(),unknown()),false));
@@ -59,7 +59,7 @@ class AccountFundingIntegrationTests {
         Change request=change(0,unknown());
         var first=service.change(Scope.CONFIRMED,request,false);
         assertEquals(first,service.change(Scope.CONFIRMED,request,false));
-        assertThrows(SimulationException.class,()->service.change(Scope.SIMULATED,request,false));
+        assertEquals(first,service.change(Scope.SIMULATED,request,false));
         assertEquals(1,service.read(Scope.CONFIRMED,1).history().size());
     }
     @Test void staleConfirmationRejectedAndRevocationAppendsHistory() {
@@ -102,15 +102,15 @@ class AccountFundingIntegrationTests {
         service.change(Scope.CONFIRMED,change(0,unknown()),false);
         assertThrows(RuntimeException.class,()->db.sql("UPDATE account_funding_preference SET status='REVOKED' WHERE user_id=:u").param("u",user).update());
     }
-    @Test void riskUsesOnlyOwnConfirmedSnapshotAndDoesNotFallBackToSimulation() {
+    @Test void historicalScreenshotIsNotAnIndependentCurrentPortfolio() {
         UUID snapshot=UUID.randomUUID();
         db.sql("INSERT INTO portfolio_snapshot(snapshot_id,user_id,source_kind,data_as_of_date,data_as_of_status,source_description,source_content_hash) VALUES(:s,:u,'USER_CONFIRMED_SCREENSHOT','2026-09-28','KNOWN','合成测试',:h)")
                 .param("s",snapshot).param("u",user).param("h","b".repeat(64)).update();
         db.sql("INSERT INTO portfolio_holding_snapshot(holding_snapshot_id,snapshot_id,fund_code,fund_name,reported_amount,reported_weight_pct,reported_daily_gain_amount,reported_holding_gain_amount,reported_holding_gain_pct,reported_cumulative_gain_amount) VALUES(:id,:s,'000001','合成基金',100,100,0,0,0,0)")
                 .param("id",UUID.randomUUID()).param("s",snapshot).update();
-        assertEquals(new BigDecimal("100.00"),risks.read(Scope.CONFIRMED,null).recordedAmount());
+        assertNull(risks.read(Scope.CONFIRMED,null).recordedAmount());
         assertNull(risks.read(Scope.SIMULATED,null).recordedAmount());
-        assertNull(options.read(Scope.CONFIRMED,"000001",null).advice());
+        assertThrows(com.fundradar.core.notification.service.NotificationNotFoundException.class,()->options.read(Scope.CONFIRMED,"000001",null));
         assertThrows(com.fundradar.core.notification.service.NotificationNotFoundException.class,()->options.read(Scope.SIMULATED,"000001",null));
         assertThrows(IllegalArgumentException.class,()->options.read(Scope.CONFIRMED,"",null));
         login(other,true);

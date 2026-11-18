@@ -11,7 +11,7 @@ import static com.fundradar.core.portfolio.AccountFundingTypes.Scope;
 public class AccountRiskController {
     private final AccountRiskService service;
     public AccountRiskController(AccountRiskService service) { this.service=service; }
-    @GetMapping public ApiResponse<AccountRiskService.Result> read(@RequestParam Scope scope,
+    @GetMapping public ApiResponse<AccountRiskService.Result> read(@RequestParam(defaultValue="SIMULATED") Scope scope,
             @RequestParam(required=false) BigDecimal scenarioDeclinePct,HttpServletResponse response) {
         response.setHeader("Cache-Control","private, no-store");
         return ApiResponse.success(service.read(scope,scenarioDeclinePct));

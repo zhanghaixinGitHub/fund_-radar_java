@@ -16,11 +16,11 @@ public class DecisionControllerV2 {
     @GetMapping("/funds/{code}/decision") public ApiResponse<?> latest(@PathVariable String code) { return ok(holdings.latest(code)); }
     @PostMapping("/funds/{code}/decision/generate") public ApiResponse<?> generate(@PathVariable String code) { return ok(holdings.generate(code)); }
     @GetMapping("/funds/{code}/decision/history") public ApiResponse<?> history(@PathVariable String code,
-      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue=HoldingAdvicePolicy.VERSION) String version) { return ok(HoldingAdvicePolicy.VERSION.equals(version)?holdings.history(code,page):service.history(code,page,version)); }
+      @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue=HoldingAdvicePolicy.VERSION) String version) { return ok(Set.of(HoldingAdvicePolicy.VERSION,HoldingAdvicePolicy.PREVIOUS_VERSION).contains(version)?holdings.history(code,page,version):service.history(code,page,version)); }
     @GetMapping("/funds/{code}/decision/reports/{id}") public ApiResponse<?> report(@PathVariable String code,@PathVariable UUID id) { return ok(service.report(code,id)); }
     @GetMapping("/funds/{code}/decision/outcomes") public ApiResponse<?> outcomes(@PathVariable String code,@RequestParam(defaultValue="1") int page,
       @RequestParam(defaultValue=HoldingAdvicePolicy.VERSION) String version) {
-        if(HoldingAdvicePolicy.VERSION.equals(version)) {holdings.history(code,page);return ok(Map.of());}
+        if(Set.of(HoldingAdvicePolicy.VERSION,HoldingAdvicePolicy.PREVIOUS_VERSION).contains(version)) {holdings.history(code,page,version);return ok(Map.of());}
         return ok(service.outcomes(code,page,version));}
     @GetMapping("/strategy-preference") public ApiResponse<?> preference() { return ok(service.preference()); }
     @PostMapping("/strategy-preference") public ApiResponse<?> preference(@RequestBody Map<String,String> body) {

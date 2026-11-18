@@ -25,6 +25,7 @@ public class AccountOptionsService {
     private final Clock clock;
     public AccountOptionsService(AccountRiskService risk,AccountFundingRepository funding,Clock clock) { this.risk=risk;this.funding=funding;this.clock=clock; }
     public Result read(Scope scope,String code,BigDecimal hypotheticalDeclinePct) {
+        scope=Scope.SIMULATED;
         UUID user=CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_SELF_READ).userId();
         if(code==null || !code.matches("[0-9]{6}")) throw new IllegalArgumentException("请选择已录入的基金。");
         var account=risk.read(scope,hypotheticalDeclinePct);
@@ -35,11 +36,11 @@ public class AccountOptionsService {
     /** 候选路径列出完整前后条件，明确停在资料核对，不输出未验证的精确金额、成交日或买卖建议。 */
     static Result assemble(AccountRiskService.Result account,AccountRiskService.Holding holding,View preference,LocalDate today) {
         List<String> facts=new ArrayList<>();
-        facts.add((account.scope()==Scope.CONFIRMED?"本人确认持仓资料":"模拟记录")+"包含该基金，持仓日期"+(holding.date()==null?"未知":holding.date())+"。");
+        facts.add("我的持仓"+"包含该基金，持仓日期"+(holding.date()==null?"未知":holding.date())+"。");
         account.sources().stream().filter(s->s.fundCode().equals(holding.fundCode())).forEach(s->facts.add("可对照披露持仓日"+s.reportDate()+"，公开日"+s.publishedDate()+"；披露不代表当前实际持仓。"));
         List<String> gaps=new ArrayList<>();
         if(holding.date()==null || holding.issue()!=null) gaps.add("持仓日期或估值尚未核对。");
-        if(preference==null || !"ACTIVE".equals(preference.status())) gaps.add("该范围尚无本人确认的资金使用和承受条件。");
+        if(preference==null || !"ACTIVE".equals(preference.status())) gaps.add("当前尚无本人确认的资金使用和承受条件。");
         gaps.add("真实渠道的申赎开放状态、截止规则、确认及到账日期尚未核对。");
         gaps.add("可操作份额、各持有批次及相应费用依据尚未核对；实际费用须以所用渠道和持有时间为准。");
         gaps.add("退出、最短观察间隔和重新进入条件尚无适用的完整效果验证。");
@@ -62,12 +63,12 @@ public class AccountOptionsService {
         return new Result(account.scope(),holding.fundCode(),holding.fundName(),holding.date(),today,
                 "当前可比较条件与代价，尚不足以形成明确买卖建议。",null,List.copyOf(facts),personalChecks(preference,account,today),paths,
                 List.of("以上依据本次已录入资料；资金安排、持仓或相关事实变化后需重新核对。","交易状态未核验，因此没有可执行金额、份额、最早成交日期或承诺有效期。"),
-                List.of("候选路径并非已验证的择时策略，也不执行交易。","本人确认持仓与模拟组合分别核对；实际费用以所用渠道规则为准。","资料不足时暂不提供操作建议。"));
+                List.of("候选路径并非已验证的择时策略，也不执行交易。","当前持仓按同一账本核对；实际费用以所用渠道规则为准。","资料不足时暂不提供操作建议。"));
     }
     /** 只比较本人已确认条件；愿意承受的百分比和现实可承担金额分别呈现，不互相替代。 */
     static List<String> personalChecks(View preference,AccountRiskService.Result account,LocalDate today) {
         if(preference==null || !"ACTIVE".equals(preference.status()) || preference.input()==null)
-            return List.of("该范围没有已确认生效的资金安排；不能推定用款期限或损失承受能力。");
+            return List.of("当前没有已确认生效的资金安排；不能推定用款期限或损失承受能力。");
         Input value=preference.input();List<String> out=new ArrayList<>();
         if(value.useDate()!=null) out.add("预计用款日"+value.useDate()+(today.isBefore(value.useDate())?"，仍需核对真实到账期限。":"已到达，需优先复查资金是否可按时使用；不据此自动卖出。"));
         else out.add("预计用款日期未知，不能承诺退出和买回时间合适。");

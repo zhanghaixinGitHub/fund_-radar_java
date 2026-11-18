@@ -34,7 +34,7 @@ public class ReviewNoticeChecker {
     @Transactional
     public int check(UUID user,FundNewsFactsResponse news,LocalDate today) {
         int changed=0;
-        for(Scope scope:Scope.values()) {
+        for(Scope scope:List.of(Scope.SIMULATED)) {
             View value=funding.current(user,scope);
             for(String kind:List.of("USE_DATE","REVIEW_DUE")) {
                 Observation observation=account(scope,kind,value,today);
@@ -42,6 +42,7 @@ public class ReviewNoticeChecker {
                 else changed+=closeAccount(user,scope,kind,value)?1:0;
             }
         }
+        for(String kind:List.of("USE_DATE","REVIEW_DUE")) changed+=closeAccount(user,Scope.CONFIRMED,kind,null,"已统一使用当前我的持仓资金安排；旧范围提醒停止，历史记录保留。")?1:0;
         // 锁住本次采用的订阅和关注关系直到消息写入结束，关闭/取消关注成功后不会再按旧状态投递。
         // 不删除规则，因此重新关注时仍记得用户曾手动关闭哪类提醒。
         List<UUID> rules=db.sql("""
@@ -78,7 +79,7 @@ public class ReviewNoticeChecker {
         LocalDate due=kind.equals("USE_DATE")?value.input().useDate():value.input().reviewIntervalDays()==null?null:
                 value.confirmedAt().atZone(ZoneId.of("Asia/Shanghai")).toLocalDate().plusDays(value.input().reviewIntervalDays());
         if(due==null) return null;
-        String label=scope==Scope.CONFIRMED?"本人确认持仓":"模拟组合";
+        String label="我的持仓";
         boolean active=!today.isBefore(due);
         Map<String,Object> payload=new TreeMap<>();
         payload.put("title",kind.equals("USE_DATE")?"你设定的用款日期已到达":"你设定的定期复查日期已到达");
@@ -88,11 +89,14 @@ public class ReviewNoticeChecker {
         return new Observation("account:"+scope+":"+kind,scope.name(),null,kind,active?State.ACTIVE:State.RESOLVED,payload,null);
     }
     private boolean closeAccount(UUID user,Scope scope,String kind,View value) {
+        return closeAccount(user,scope,kind,value,null);
+    }
+    private boolean closeAccount(UUID user,Scope scope,String kind,View value,String explanation) {
         var old=db.sql("SELECT payload FROM review_notice WHERE user_id=:user AND business_key=:key AND lifecycle<>'RETRACTED'")
                 .param("user",user).param("key","account:"+scope+":"+kind).query(String.class).optional();
         if(old.isEmpty()) return false;
         Map<String,Object> payload=decode(old.get());
-        payload.put("changeExplanation",value==null || "REVOKED".equals(value.status())?"本人安排已撤销，原条件与提醒历史保留。":"该项日期条件已留空，停止按原条件复查，不能解释为风险解除。");
+        payload.put("changeExplanation",explanation!=null?explanation:value==null || "REVOKED".equals(value.status())?"本人安排已撤销，原条件与提醒历史保留。":"该项日期条件已留空，停止按原条件复查，不能解释为风险解除。");
         return notices.observe(user,new Observation("account:"+scope+":"+kind,scope.name(),null,kind,State.RETRACTED,payload,null));
     }
     /** 公告只是公开事实；稳定原文摘要用于去重，取得时间变动不制造第二次提醒。 */

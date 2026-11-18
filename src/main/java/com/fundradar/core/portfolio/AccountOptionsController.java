@@ -12,7 +12,7 @@ import static com.fundradar.core.portfolio.AccountFundingTypes.Scope;
 public class AccountOptionsController {
     private final AccountOptionsService service;
     public AccountOptionsController(AccountOptionsService service) { this.service=service; }
-    @GetMapping public ApiResponse<AccountOptionsService.Result> read(@RequestParam Scope scope,@RequestParam String fundCode,
+    @GetMapping public ApiResponse<AccountOptionsService.Result> read(@RequestParam(defaultValue="SIMULATED") Scope scope,@RequestParam String fundCode,
             @RequestParam(required=false) BigDecimal hypotheticalDeclinePct,HttpServletResponse response) {
         response.setHeader("Cache-Control","private, no-store");return ApiResponse.success(service.read(scope,fundCode,hypotheticalDeclinePct));
     }

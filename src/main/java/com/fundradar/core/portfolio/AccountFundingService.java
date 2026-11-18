@@ -19,16 +19,18 @@ public class AccountFundingService {
     public AccountFundingService(AccountFundingRepository repo,TransactionTemplate tx) { this.repo=repo;this.tx=tx; }
     private UUID reader() { return CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_SELF_READ).userId(); }
     public Page read(Scope scope,int page) {
+        scope=Scope.SIMULATED;
         UUID user=reader();
-        if(scope==null || page<1 || page>10000) throw new IllegalArgumentException("请选择有效的持仓范围和页码。");
+        if(page<1 || page>10000) throw new IllegalArgumentException("请选择有效的页码。");
         List<View> items=repo.history(user,scope,page);
         return new Page(scope,repo.current(user,scope),items.stream().limit(20).toList(),items.size()>20);
     }
     /** 复用本人提醒设置写权限；拥有公共基金读权限或管理他人权限均不能代填。 */
-    public View change(Scope scope,Change change,boolean revoke) {
+    public View change(Scope ignoredScope,Change change,boolean revoke) {
+        final Scope scope=Scope.SIMULATED;
         UUID user=reader();
         CurrentUserContext.requirePermission(PermissionCode.ALERT_RULE_SELF_WRITE);
-        if(scope==null || change==null || change.requestId()==null || change.expectedRevision()<0 || !change.confirmed())
+        if(change==null || change.requestId()==null || change.expectedRevision()<0 || !change.confirmed())
             throw new IllegalArgumentException("请核对后明确确认本次设置。");
         Input input=revoke ? null : validate(change.input());
         String status=revoke ? "REVOKED" : "ACTIVE";
@@ -37,7 +39,7 @@ public class AccountFundingService {
             repo.lock(user);
             var existing=repo.request(user,change.requestId());
             if(existing!=null) {
-                if(!hash.equals(existing.hash())) throw new SimulationException("ACCOUNT_REQUEST_CHANGED","该次确认内容已变化，请重新核对。");
+                if(!hash.equals(existing.hash()) && !repo.hash(java.util.Arrays.asList(ignoredScope,status,input,change.expectedRevision())).equals(existing.hash())) throw new SimulationException("ACCOUNT_REQUEST_CHANGED","该次确认内容已变化，请重新核对。");
                 return existing.view();
             }
             View current=repo.current(user,scope);

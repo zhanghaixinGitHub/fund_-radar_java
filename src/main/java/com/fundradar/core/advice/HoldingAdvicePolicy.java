@@ -11,7 +11,8 @@ import java.util.*;
 /** 当前持仓的分问题判断，不对缺失周期重新分配权重，也不按总分推导买卖。 */
 @Component
 public class HoldingAdvicePolicy {
-    public static final String VERSION="HOLDING_ADVICE_V4_EVIDENCE";
+    public static final String PREVIOUS_VERSION="HOLDING_ADVICE_V4_EVIDENCE";
+    public static final String VERSION="HOLDING_ADVICE_V5_PERSONAL";
     private static final ZoneId ZONE=ZoneId.of("Asia/Shanghai");
     private final ObjectMapper json;
     public HoldingAdvicePolicy(ObjectMapper json) {this.json=json;}
@@ -79,8 +80,16 @@ public class HoldingAdvicePolicy {
             addUnique(result,"opposingEvidence",period.path("counterReason").asText());
             for(var condition:period.path("conditions")) addUnique(result,"reassessmentConditions",condition.asText());
         }
-        if(!active.containsKey("T5_V1")) missing.add("五日缺少当前有效的明确判断，无法核对近期操作时机。");
-        if(!active.containsKey("T20_V1")) missing.add("二十日缺少当前有效的明确判断，无法核对中期持有方向。");
+        String preference=personal.path("preference").asText("");
+        boolean explicitPreference=Set.of("SHORT","BALANCED","LONG").contains(preference);
+        if(!explicitPreference) missing.add("尚未确认投资偏好，不把默认均衡当作本人选择。");
+        List<String> required=switch(preference) {
+            case "SHORT" -> List.of("T5_V1");
+            case "LONG" -> List.of("T20_V1","M6_V1");
+            default -> List.of("T5_V1","T20_V1");
+        };
+        for(String horizon:required) if(!active.containsKey(horizon))
+            missing.add(label(horizon)+"缺少当前有效的明确判断，尚不能按本人持有偏好作出操作判断。");
         for(var item:diagnosis.path("items")) {
             if("INSUFFICIENT".equals(item.path("verdict").asText()))
                 addUnique(result,"neutralEvidence",diagnosisLabel(item.path("item").asText())+"资料不足，仅保留已有评分和正式分析，不补造结论。");
@@ -99,8 +108,8 @@ public class HoldingAdvicePolicy {
         boolean available=number(position,"availableShares").orElse(BigDecimal.ZERO).signum()>0;
         if(frozen) limits.add("存在冻结份额，已计入可卖限制，不重复扣减。");
         limits.add("未核齐本次申赎开放状态及逐笔持有期限费用，不提供精确买卖数量；实际以交易渠道为准。");
-        limits.add("缺少完整个人资金与风险承受信息，不据此认定适合继续增加投入。");
-        if(personal.hasNonNull("knownWeightPct")) limits.add("本基金占已知模拟持仓市值"+personal.path("knownWeightPct").asText()+"%；未覆盖部分不计为零，也不代表完整行业风险。");
+        limits.add("未记录经核实的可追加现金及全部资金占用，本次不建议新增投入，也不提供买入金额。");
+        if(personal.hasNonNull("knownWeightPct")) limits.add("本基金占当前已知持仓市值"+personal.path("knownWeightPct").asText()+"%；未覆盖部分不计为零，也不代表完整行业风险。");
         var qualityParts=new ArrayList<String>();
         if(ratingUsable) for(var dimension:rating.path("dimensions")) {
             String conclusion=dimension.path("assessment").path("conclusion").asText("");
@@ -110,16 +119,32 @@ public class HoldingAdvicePolicy {
         String timing="五日或二十日依据不足，暂不形成操作判断。";
         String action=null,summary="资料尚不足，暂不形成综合建议。";
         if(missing.isEmpty()) {
-            String shortDirection=active.get("T5_V1").path("decision").asText();
-            String medium=active.get("T20_V1").path("decision").asText();
-            boolean longUp=active.containsKey("M6_V1") && "UP".equals(active.get("M6_V1").path("decision").asText());
-            if("DOWN".equals(medium) && "DOWN".equals(shortDirection) && !longUp) {
-                action="REDUCE";timing="五日与二十日均有下行依据，可考虑降低部分暴露；不能据此推断需要全部退出。";
-                summary="考虑减仓，先核对费用与可卖份额。";
-            } else {
-                action="HOLD";timing="五日与二十日"+(shortDirection.equals(medium)?"方向一致，但长期条件和个人投入条件仍有限制。":"方向不同，暂不以短期变化替代中期持有判断。" );
-                summary="继续持有，暂缓加仓；关注主要依据是否变化。";
-            }
+            String shortDirection=active.containsKey("T5_V1")?active.get("T5_V1").path("decision").asText():"";
+            String medium=active.containsKey("T20_V1")?active.get("T20_V1").path("decision").asText():"";
+            String longer=active.containsKey("M6_V1")?active.get("M6_V1").path("decision").asText():"";
+            boolean reduce=switch(preference) {
+                case "SHORT" -> "DOWN".equals(shortDirection);
+                case "LONG" -> "DOWN".equals(medium) && "DOWN".equals(longer);
+                default -> "DOWN".equals(shortDirection) && "DOWN".equals(medium);
+            };
+            action=reduce?"REDUCE":"HOLD";
+            timing=switch(preference) {
+                case "SHORT" -> "按本人短线偏好优先核对五日方向，二十日与半年作为补充，不因短线偏好省略费用与个人限制。";
+                case "LONG" -> "按本人长线偏好以二十日和半年有效方向为主，单独五日下跌不触发减仓；长期偏好不覆盖本人资金限制。";
+                default -> "按本人均衡偏好同时核对五日与二十日；两者均向下时考虑减仓，方向分歧时暂不追随短期变化。";
+            };
+            summary=reduce?"考虑减仓，先核对费用与可卖份额。":"继续持有，暂缓加仓；关注主要依据是否变化。";
+        }
+        // 资金安排是实际决策门槛。未知不按零处理，用款需要不等同于已核实的现金缺口。
+        FundingCheck funding=checkFunding(personal,required,active,today,now);
+        for(String gap:funding.missing()) addUnique(result,"missingOptionalFactors",gap);
+        for(String reason:funding.reasons()) addUnique(result,"opposingEvidence",reason);
+        boolean safePosition=held && navDate!=null && !navDate.isAfter(today) && position.path("issue").asText("").isBlank();
+        if(funding.lossLimitReached() && safePosition) {
+            action="REDUCE";summary="当前持仓亏损或波动承受条件已达到本人限制，考虑减仓并核对费用。";
+            timing="本人确认的资金承受条件优先于看涨方向和持有偏好；减仓不能挽回已经发生的亏损。";
+        } else if("HOLD".equals(action) && !funding.holdAllowed()) {
+            action=null;summary=funding.useDue()?"先核对用款与到账安排，暂缓新增投入；当前不能认定继续持有合适。":"个人资金条件尚不足，暂不形成继续持有或加仓建议。";
         }
         var rule=personal.path("rule");boolean ruleTriggered=false;
         var profit=number(rule,"takeProfitPct");var gain=number(position,"holdingGainRate");
@@ -138,21 +163,78 @@ public class HoldingAdvicePolicy {
                 ruleTriggered=true;addUnique(result,"opposingEvidence","已达到本人确认的回撤减仓线，应复核持仓；不自动卖出。");
             }
         }
-        if(ruleTriggered && held && available && navDate!=null && !navDate.isAfter(today) && position.path("issue").asText("").isBlank()) {
+        if(ruleTriggered && safePosition) {
             action="REDUCE";summary="已触及本人确认规则，考虑减仓并先复核操作条件。";
             timing="本次优先提示已确认个人规则；公共分析缺项仍保留，不宣称资料齐全。";
         }
         if("REDUCE".equals(action) && (pendingSell || !available)) {
-            action="HOLD";summary="暂缓新增操作，先处理待确认卖出或可卖份额限制。";
+            action=null;summary="暂缓新增操作，先处理待确认卖出或可卖份额限制；原减仓依据仍需复核。";
+            missing.add("已有卖出安排或没有可卖份额，本次不重复形成卖出建议。");
             limits.add("此处暂缓操作不代表看好后续走势。");
         }
         if(action!=null) { result.put("decision",action);result.put("adviceState",missing.isEmpty()?"READY":"QUALIFIED"); }
         result.put("summary",summary);result.put("qualityAssessment",quality);result.put("timingAssessment",timing);
-        result.put("personalAssessment",pendingBuy || pendingSell || plans || frozen?"已有交易、定投或冻结安排，操作前应一并核对。":"本次未发现本基金待确认订单、执行中定投或冻结份额；不代表已核齐个人资金条件。");
+        result.put("personalAssessment",funding.assessment()+(pendingBuy || pendingSell || plans || frozen?"；已有交易、定投或冻结安排需一并核对。":"。"));
         result.put("dataAsOf",ratingDate);
         result.put("validUntil",today.plusDays(1).atStartOfDay(ZONE).toInstant().toString());
-        addUnique(result,"reassessmentConditions","持仓、订单、定投或本人规则变化后重新评估；下一个北京时间自然日不自动沿用本次操作判断。");
+        addUnique(result,"reassessmentConditions","投资偏好、资金安排、持仓、订单、定投或本人规则变化后重新评估；下一个北京时间自然日不自动沿用本次操作判断。");
         return result;
+    }
+    private record FundingCheck(boolean holdAllowed,boolean lossLimitReached,boolean useDue,
+                                List<String> missing,List<String> reasons,String assessment) {}
+    private FundingCheck checkFunding(JsonNode personal,List<String> required,Map<String,JsonNode> active,LocalDate today,Instant now) {
+        List<String> gaps=new ArrayList<>(),reasons=new ArrayList<>();
+        var funding=personal.path("funding");var input=funding.path("input");
+        if(!"ACTIVE".equals(funding.path("status").asText()) || !input.isObject()
+                || !known(funding.path("confirmedAt").asText(),now))
+            return new FundingCheck(false,false,false,List.of("当前没有可用的本人已确认资金安排，不能默认适合继续持有。"),List.of(),"资金安排尚未确认或已撤销，未采用历史安排替代");
+        var requiredAmount=number(input,"requiredAmount");var affordable=number(input,"affordableLossAmount");var willing=number(input,"willingLossPct");
+        if(requiredAmount.isEmpty() || requiredAmount.get().signum()<0) gaps.add("预计用款金额尚未确认；没有预计用款时请明确填写0。");
+        if(affordable.isEmpty() || affordable.get().signum()<0 || willing.isEmpty() || willing.get().signum()<0 || willing.get().compareTo(new BigDecimal("100"))>0)
+            gaps.add("愿意接受的损失比例或现实可承担金额尚未确认。");
+        boolean complete=personal.path("portfolioComplete").asBoolean(false) && !personal.path("portfolio").isEmpty();
+        BigDecimal cost=BigDecimal.ZERO,gain=BigDecimal.ZERO;
+        Set<String> dates=new HashSet<>();
+        for(var holding:personal.path("portfolio")) {
+            var c=number(holding,"cost");var g=number(holding,"holdingGain");LocalDate day=date(holding.path("navDate").asText());
+            if(c.isEmpty() || c.get().signum()<0 || g.isEmpty() || day==null || day.isAfter(today) || !holding.path("issue").asText("").isBlank()) complete=false;
+            else {cost=cost.add(c.get());gain=gain.add(g.get());dates.add(day.toString());}
+        }
+        if(!complete || cost.signum()<=0) gaps.add("当前持仓成本、净值日期或亏损信息不完整，不能核对账户承受条件。");
+        BigDecimal loss=gain.negate().max(BigDecimal.ZERO);
+        boolean reached=false;
+        if(complete && cost.signum()>0) {
+            boolean amountReached=affordable.isPresent() && affordable.get().signum()>=0 && loss.compareTo(affordable.get())>=0;
+            boolean percentReached=willing.isPresent() && willing.get().signum()>=0 && willing.get().compareTo(new BigDecimal("100"))<=0
+                    && loss.multiply(new BigDecimal("100")).compareTo(cost.multiply(willing.get()))>=0;
+            reached=amountReached || percentReached;
+            if(amountReached) reasons.add("当前账户持有亏损"+loss.toPlainString()+"元，已达到本人确认的可承担损失金额"+affordable.get().toPlainString()+"元；减仓不能挽回已发生亏损。");
+            if(percentReached) reasons.add("当前账户持有亏损占剩余成本"+loss.multiply(new BigDecimal("100")).divide(cost,2,java.math.RoundingMode.HALF_UP).toPlainString()+"%，已达到本人愿意接受的"+willing.get().toPlainString()+"%；此处不是历史回撤或未来损失预测。");
+        }
+        boolean useDue=false;
+        if(requiredAmount.isPresent() && requiredAmount.get().signum()>0) {
+            LocalDate useDate=date(input.path("useDate"));
+            if(useDate==null) gaps.add("预计需要用款，但用款日期尚未确认。");
+            else {
+                LocalDate end=today;
+                for(String horizon:required) if(active.containsKey(horizon)) {
+                    LocalDate candidate=date(active.get(horizon).path("endDate").asText());
+                    if(candidate!=null && candidate.isAfter(end)) end=candidate;
+                }
+                useDue=!useDate.isAfter(end);
+                if(useDue) {gaps.add("用款日已到达或落在本次持有判断区间内，尚未核实现金覆盖及赎回到账日期。");reasons.add("本人预计用款日"+useDate+"，需要"+requiredAmount.get().toPlainString()+"元；用款安排优先，未核实现金覆盖与到账日期前不建议继续持有或追加投入，也不把用款额当成实际现金缺口。");}
+            }
+        }
+        LocalDate confirmed;
+        // 确认日期统一按北京时间，不以本机时区或UTC日期触发提前复查。
+        try {confirmed=OffsetDateTime.parse(funding.path("confirmedAt").asText()).atZoneSameInstant(ZONE).toLocalDate();} catch(RuntimeException ignored) {confirmed=null;}
+        if(input.hasNonNull("reviewIntervalDays") && confirmed!=null) {
+            int interval=input.path("reviewIntervalDays").asInt();
+            if(interval<1 || !today.isBefore(confirmed.plusDays(interval))) gaps.add("已到本人设定的资金复查日期，请重新确认后再判断继续持有条件。");
+        }
+        return new FundingCheck(gaps.isEmpty() && !reached,reached,useDue,List.copyOf(gaps),List.copyOf(reasons),
+                (reached?"已使用当前持仓账本核对本人损失限制，承受条件已触发":gaps.isEmpty()?"已核对本人用款安排与当前账户持有亏损，尚未达到已确认限制；不保证未来不亏损":"已读取本人资金安排，但继续持有条件尚未核齐")
+                +(dates.size()>1?"；各基金净值日期不同，按当前页面各基金最近已公布估值核对，不代表同日历史回撤":""));
     }
     private void addUnique(ObjectNode target,String key,String text) {
         if(text.isBlank()) return;
@@ -172,6 +254,17 @@ public class HoldingAdvicePolicy {
                 "，近一月涨跌"+number(facts,"month_change_rate").get().multiply(BigDecimal.valueOf(100)).setScale(2,java.math.RoundingMode.HALF_UP)+"%；样本不代表全市场排名。";
         return item.path("evidence").asText().replaceAll("[^。]*Java[^。]*。?","")
             .replaceAll("fund_profile[^。]*。?","").replace("ACCUMULATED 口径","累计净值口径");
+    }
+    private static LocalDate date(JsonNode value) {
+        // 已确认资金安排中的LocalDate可能序列化为[年,月,日]；两种真实格式等价，
+        // 不能把已有日期误报成用户尚未确认，也不能把畸形或无效日期自动补正。
+        if(value.isTextual()) return date(value.asText());
+        if(value.isArray() && value.size()==3) {
+            for(var part:value) if(!part.isIntegralNumber() || !part.canConvertToInt()) return null;
+            try {return LocalDate.of(value.get(0).intValue(),value.get(1).intValue(),value.get(2).intValue());}
+            catch(DateTimeException ignored) {return null;}
+        }
+        return null;
     }
     private static LocalDate date(String value) {try{return LocalDate.parse(value);}catch(RuntimeException e){return null;}}
     private static boolean future(String value,Instant now) {try{return OffsetDateTime.parse(value).toInstant().isAfter(now);}catch(RuntimeException e){return false;}}

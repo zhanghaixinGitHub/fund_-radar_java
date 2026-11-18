@@ -14,7 +14,7 @@ import java.time.LocalDate;
 import java.util.*;
 import static com.fundradar.core.portfolio.AccountFundingTypes.Scope;
 
-/** 仅对本人已录入范围计算。当前快照不生成账户历史回撤，不把模拟金额并入真实确认快照。 */
+/** 当前持仓账本为唯一业务来源；历史截图仅留存，不作为独立账户读取。 */
 @Service
 public class AccountRiskService {
     public record Holding(String fundCode,String fundName,
@@ -35,23 +35,13 @@ public class AccountRiskService {
     }
     public Result read(Scope scope,BigDecimal scenario) {
         UUID user=CurrentUserContext.requirePermission(PermissionCode.PORTFOLIO_SELF_READ).userId();
-        if(scope==null || scenario!=null && (scenario.signum()<0 || scenario.compareTo(new BigDecimal("100"))>0))
-            throw new IllegalArgumentException("请选择持仓范围；假设跌幅应在0至100之间。");
-        List<Holding> holdings;
-        if(scope==Scope.SIMULATED) {
-            holdings=simulation.positions(user).stream().filter(p->p.marketValue()!=null && p.marketValue().signum()>0)
-                    .map(p->new Holding(p.fundCode(),p.fundName(),p.marketValue(),p.navDate(),p.issue())).toList();
-        } else {
-            // LIMIT 位于整份本人快照内，超过合理上限直接拒绝，不能截断后冒称全部范围。
-            holdings=db.sql("""
-                SELECT h.fund_code,h.fund_name,h.reported_amount,s.data_as_of_date
-                FROM portfolio_snapshot s JOIN portfolio_holding_snapshot h ON h.snapshot_id=s.snapshot_id
-                WHERE s.user_id=:user AND s.snapshot_id=(SELECT snapshot_id FROM portfolio_snapshot
-                    WHERE user_id=:user ORDER BY imported_at DESC,snapshot_id DESC LIMIT 1)
-                ORDER BY h.fund_code LIMIT 1001
-                """).param("user",user).query((r,n)->new Holding(r.getString("fund_code"),r.getString("fund_name"),
-                        r.getBigDecimal("reported_amount"),r.getObject("data_as_of_date",LocalDate.class),null)).list();
-        }
+        if(scenario!=null && (scenario.signum()<0 || scenario.compareTo(new BigDecimal("100"))>0))
+            throw new IllegalArgumentException("假设跌幅应在0至100之间。");
+        // 当前持仓账本是唯一业务来源；旧scope参数仅兼容历史链接，不再读取截图快照。
+        scope=Scope.SIMULATED;
+        List<Holding> holdings=simulation.positions(user).stream()
+                .filter(p->p.shares()!=null && p.shares().signum()>0)
+                .map(p->new Holding(p.fundCode(),p.fundName(),p.marketValue(),p.navDate(),p.issue())).toList();
         if(holdings.size()>1000) throw new IllegalArgumentException("已录入持仓数量超过当前账户检查范围。");
         // 仅查询公共基金事实，不向 Python 发送用户名、份额、金额或资金安排。
         Map<String,FundRiskSummaryResponse> risks=new HashMap<>();
@@ -63,10 +53,12 @@ public class AccountRiskService {
     }
     /** 已知穿透占比不重新拉满；同一股票按代码合并，行业只接受净资产分母。 */
     static Result calculate(Scope scope,List<Holding> holdings,Map<String,FundRiskSummaryResponse> risks,BigDecimal scenario) {
-        BigDecimal total=holdings.stream().map(Holding::amount).reduce(BigDecimal.ZERO,BigDecimal::add);
-        if(holdings.stream().anyMatch(h->h.amount().signum()<0) || holdings.stream().map(Holding::fundCode).distinct().count()!=holdings.size())
+        BigDecimal total=holdings.stream().map(Holding::amount).filter(Objects::nonNull).reduce(BigDecimal.ZERO,BigDecimal::add);
+        if(holdings.stream().anyMatch(h->h.amount()!=null && h.amount().signum()<0) || holdings.stream().map(Holding::fundCode).distinct().count()!=holdings.size())
             throw new IllegalArgumentException("本人持仓快照需要重新核对。");
+        boolean complete=holdings.stream().allMatch(h->h.amount()!=null);
         List<String> limits=new ArrayList<>();
+        if(!complete) limits.add("部分持仓缺少估值，账户总额和整体情景损失暂不可计算。");
         List<Source> sources=new ArrayList<>();
         Map<String,Exposure> industries=new TreeMap<>(),companies=new TreeMap<>();
         BigDecimal covered=BigDecimal.ZERO,known=BigDecimal.ZERO;
@@ -74,7 +66,7 @@ public class AccountRiskService {
         LocalDate date=dates.size()==1 ? dates.iterator().next() : null;
         if(date==null && !holdings.isEmpty()) limits.add("持仓日期未知或不一致，不能视为同一天的完整账户。");
         if(holdings.stream().anyMatch(h->h.issue()!=null)) limits.add("部分持仓估值待核对，金额保留原记录。");
-        if(total.signum()>0) for(Holding holding:holdings) {
+        if(complete && total.signum()>0) for(Holding holding:holdings) {
             var risk=risks.get(holding.fundCode());
             if(risk==null || !holding.fundCode().equals(risk.fundCode()) || !risk.available() || holding.date()==null || holding.issue()!=null) continue;
             try {
@@ -97,9 +89,9 @@ public class AccountRiskService {
         limits.add("金额与占比仅代表已录入范围；披露持仓不等于当前实际持仓，未覆盖部分保持未知。");
         limits.add("缺少完整资金流水及可比收益序列，未计算历史账户回撤；买入以来盈亏与回撤不是同一个指标。");
         limits.add("情景是对已录入金额统一假设下跌，忽略费用及资金在途，不是走势预测或发生概率。");
-        return new Result(scope,date,scope==Scope.CONFIRMED ? "已录入的本人确认持仓" : "模拟组合",holdings.isEmpty()?null:total,
-                holdings,sorted(industries),sorted(companies),holdings.isEmpty()?null:covered,covered.signum()==0?null:known,sources,
-                scenario,scenario==null || holdings.isEmpty()?null:total.multiply(scenario).divide(new BigDecimal("100"),2,RoundingMode.HALF_UP),limits);
+        return new Result(scope,date,"我的持仓",holdings.isEmpty() || !complete?null:total,
+                holdings,sorted(industries),sorted(companies),holdings.isEmpty() || !complete?null:covered,!complete || covered.signum()==0?null:known,sources,
+                scenario,scenario==null || holdings.isEmpty() || !complete?null:total.multiply(scenario).divide(new BigDecimal("100"),2,RoundingMode.HALF_UP),limits);
     }
     private static void add(Map<String,Exposure> result,String key,String name,BigDecimal weight) {
         Exposure old=result.get(key);result.put(key,new Exposure(key,name,old==null?weight:old.weightPct().add(weight)));

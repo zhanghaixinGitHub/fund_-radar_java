@@ -12,13 +12,13 @@ public class AccountFundingController {
     private final AccountFundingService service;
     public AccountFundingController(AccountFundingService service) { this.service=service; }
     @ModelAttribute public void privateResponse(HttpServletResponse response) { response.setHeader("Cache-Control","private, no-store"); }
-    @GetMapping public ApiResponse<Page> read(@RequestParam Scope scope,@RequestParam(defaultValue="1") int page) {
+    @GetMapping public ApiResponse<Page> read(@RequestParam(defaultValue="SIMULATED") Scope scope,@RequestParam(defaultValue="1") int page) {
         return ApiResponse.success(service.read(scope,page));
     }
-    @PostMapping("/confirm") public ApiResponse<View> confirm(@RequestParam Scope scope,@RequestBody Change change) {
+    @PostMapping("/confirm") public ApiResponse<View> confirm(@RequestParam(defaultValue="SIMULATED") Scope scope,@RequestBody Change change) {
         return ApiResponse.success(service.change(scope,change,false));
     }
-    @PostMapping("/revoke") public ApiResponse<View> revoke(@RequestParam Scope scope,@RequestBody Change change) {
+    @PostMapping("/revoke") public ApiResponse<View> revoke(@RequestParam(defaultValue="SIMULATED") Scope scope,@RequestBody Change change) {
         return ApiResponse.success(service.change(scope,change,true));
     }
 }

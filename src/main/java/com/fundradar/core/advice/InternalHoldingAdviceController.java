@@ -17,10 +17,18 @@ public class InternalHoldingAdviceController {
     public InternalHoldingAdviceController(HoldingAdviceService service,AiServiceProperties config) {this.service=service;this.config=config;}
     @PostMapping("/users/{owner}/funds/{code}/generate")
     public Object generate(HttpServletRequest request,@PathVariable UUID owner,@PathVariable String code) {
+        authorize(request);
+        return PredictionWebData.of(service.generateFor(owner,code));
+    }
+    @GetMapping("/users/{owner}/funds/{code}/current")
+    public Object current(HttpServletRequest request,@PathVariable UUID owner,@PathVariable String code) {
+        authorize(request);
+        return PredictionWebData.of(service.currentFor(owner,code));
+    }
+    private void authorize(HttpServletRequest request) {
         String expected=config.getToken(),provided=request.getHeader("X-Service-Token");
         if(request.getHeader("Origin")!=null || request.getHeader("Sec-Fetch-Site")!=null
                 || expected==null || expected.isBlank() || provided==null
                 || !MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),provided.getBytes(StandardCharsets.UTF_8))) throw new AccessDeniedException();
-        return PredictionWebData.of(service.generateFor(owner,code));
     }
 }
