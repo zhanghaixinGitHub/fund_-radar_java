@@ -92,7 +92,7 @@ public class RuleRepository {
                 rule_params,source_draft_id,rule_version,status,confirmed_at)
             VALUES (:id,:user,:code,:tier,:profit,:reduce,CAST(:params AS jsonb),:draft,:version,'ACTIVE',:now)
             """).param("id",id).param("user",user).param("code",code).param("tier",tier)
-                .param("profit",takeProfit).param("reduce",reduceDrawdown).param("params",encode(params))
+                .param("profit",takeProfit,java.sql.Types.NUMERIC).param("reduce",reduceDrawdown,java.sql.Types.NUMERIC).param("params",encode(params))
                 .param("draft",sourceDraft,java.sql.Types.OTHER).param("version",VERSION).param("now",Timestamp.from(now)).update();
         return db.sql("SELECT * FROM holding_rule_profile WHERE rule_id=:id").param("id",id).query((r,n)->rule(r)).single();
     }

@@ -51,6 +51,8 @@ class SimulationEarningsTests {
         assertEquals("PENDING",result.days().items().get(0).status());
         assertEquals("PARTIAL",result.days().items().get(1).status());
         assertNull(result.days().items().get(1).dailyGain()); assertNull(result.days().items().get(1).cumulativeGain());
+        assertEquals(money("16"),result.days().items().get(1).knownCumulativeGain());
+        assertNull(result.days().items().get(0).knownCumulativeGain());
         assertEquals(money("0"),result.days().items().get(2).dailyGain());
         assertEquals(2,result.days().items().get(1).expectedFunds());
     }
@@ -69,7 +71,8 @@ class SimulationEarningsTests {
         var funds=List.of(fund("000001","2026-09-11","2026-09-15",false));
         var values=List.of(new Aggregate(date("2026-09-15"),1,0,null,money("12")));
         var result=summarize(null,funds,values,date("2026-09-11"),date("2026-09-15"),calendar(),1,20);
-        assertEquals(List.of("MISSING","MISSING","NON_TRADING","NON_TRADING","MISSING"),result.days().items().stream().map(Day::status).toList());
+        assertEquals(3,result.days().totalCount());
+        assertEquals(List.of("MISSING","MISSING","MISSING"),result.days().items().stream().map(Day::status).toList());
         assertNull(result.periodGain()); assertNull(result.knownGain());
         assertEquals(money("12"),result.days().items().get(0).cumulativeGain());
         assertEquals("CALENDAR_UNKNOWN",missingStatus(date("2026-09-13"),date("2026-09-15"),null));

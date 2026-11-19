@@ -9,11 +9,13 @@ import com.fundradar.core.notification.api.NotificationPageResponse;
 import com.fundradar.core.notification.api.NotificationResponse;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** NotificationService 的 JDBC 实现，以规则所属用户作为唯一数据范围边界。 */
@@ -26,6 +28,58 @@ public class JdbcNotificationService implements NotificationService {
     public JdbcNotificationService(JdbcClient jdbcClient, ObjectMapper objectMapper) {
         this.jdbcClient = jdbcClient;
         this.objectMapper = objectMapper;
+    }
+
+    private static final String FILTERED_FEED = """
+            WITH messages AS (
+                SELECT n.notification_id AS id, r.fund_code, r.rule_type AS kind,
+                       CASE WHEN r.rule_type = 'EVENT' THEN 'events' ELSE 'signals' END AS category,
+                       NULL::bigint AS revision, NULL::text AS lifecycle, n.status = 'READ' AS is_read,
+                       n.created_at AS occurred_at, n.payload
+                FROM notification n JOIN alert_rule r ON r.rule_id = n.rule_id
+                WHERE r.user_id = :userId
+                UNION ALL
+                SELECT review.notice_id, review.fund_code, review.kind,
+                       CASE WHEN review.kind = 'FUND_PUBLICATION' THEN 'events'
+                            WHEN review.kind IN ('TAKE_PROFIT', 'HOLDING_LOSS', 'DRAWDOWN') THEN 'thresholds'
+                            ELSE 'holding-checks' END,
+                       review.revision, review.lifecycle, review.read_revision = review.revision,
+                       review.updated_at, review.payload
+                FROM review_notice review
+                WHERE review.user_id = :userId
+            ), filtered AS (
+                SELECT * FROM messages
+                WHERE (:category = 'messages' OR category = :category)
+                  AND (:fund = '' OR fund_code = :fund)
+                  AND (NOT :unread OR NOT is_read)
+            )
+            """;
+
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public FeedPage feed(String category, String fund, boolean unread, int page, int pageSize) {
+        var filters = Map.of("userId", CurrentUserContext.require().userId(),
+                "category", category, "fund", fund, "unread", unread);
+        long total = jdbcClient.sql(FILTERED_FEED + "SELECT count(*) FROM filtered")
+                .params(filters).query(Long.class).single();
+        int actualPage = (int) Math.min(page, Math.max(1, (total + pageSize - 1) / pageSize));
+        var items = jdbcClient.sql(FILTERED_FEED + """
+                SELECT * FROM filtered ORDER BY occurred_at DESC, id DESC
+                LIMIT :pageSize OFFSET :offset
+                """).params(filters).param("pageSize", pageSize).param("offset", (long) (actualPage - 1) * pageSize)
+                .query((row, index) -> new FeedItem(row.getObject("id", UUID.class), row.getString("fund_code"),
+                        row.getString("kind"), row.getString("category"), row.getObject("revision", Long.class),
+                        row.getString("lifecycle"), row.getBoolean("is_read"),
+                        row.getTimestamp("occurred_at").toInstant(), readPayload(row))).list();
+        return new FeedPage(items, actualPage, total);
+    }
+
+    private JsonNode readPayload(ResultSet row) throws SQLException {
+        try {
+            return objectMapper.readTree(row.getString("payload"));
+        } catch (JsonProcessingException exception) {
+            throw new SQLException("notification payload is not valid JSON", exception);
+        }
     }
 
     @Override
@@ -97,20 +151,16 @@ public class JdbcNotificationService implements NotificationService {
 
     /** 映射通知存储字段，并将数据库 JSON 转为受控的 JSON 节点。 */
     private NotificationResponse mapNotification(ResultSet row) throws SQLException {
-        try {
-            return new NotificationResponse(
-                    row.getObject("notification_id", UUID.class),
-                    row.getString("fund_code"),
-                    row.getString("rule_type"),
-                    row.getString("trigger_type"),
-                    row.getString("trigger_ref"),
-                    row.getString("status"),
-                    objectMapper.readTree(row.getString("payload")),
-                    row.getTimestamp("created_at").toInstant(),
-                    row.getTimestamp("read_at") == null ? null : row.getTimestamp("read_at").toInstant()
-            );
-        } catch (JsonProcessingException exception) {
-            throw new SQLException("notification payload is not valid JSON", exception);
-        }
+        return new NotificationResponse(
+                row.getObject("notification_id", UUID.class),
+                row.getString("fund_code"),
+                row.getString("rule_type"),
+                row.getString("trigger_type"),
+                row.getString("trigger_ref"),
+                row.getString("status"),
+                readPayload(row),
+                row.getTimestamp("created_at").toInstant(),
+                row.getTimestamp("read_at") == null ? null : row.getTimestamp("read_at").toInstant()
+        );
     }
 }

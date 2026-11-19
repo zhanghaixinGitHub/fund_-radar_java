@@ -25,7 +25,8 @@ public final class SimulationEarnings {
     public record Day(LocalDate date,String status,int expectedFunds,int updatedFunds,
                       @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain,
                       @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal knownGain,
-                      @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain) {}
+                      @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain,
+                      @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal knownCumulativeGain) {}
     public record Detail(String fundCode,String fundName,String status,
                          @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain,
                          @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain,String message) {
@@ -87,13 +88,15 @@ public final class SimulationEarnings {
                         : statuses.stream().findFirst().orElse("PENDING");
             }
             days.add(new Day(date,status,count,known,complete ? v.dailyGain() : null,
-                    known>0 ? v.dailyGain() : null,valued==count && v!=null ? v.cumulativeGain() : null));
+                    known>0 ? v.dailyGain() : null,valued==count && v!=null ? v.cumulativeGain() : null,
+                    valued>0 && valued<count ? v.cumulativeGain() : null));
         }
         // 合计始终取完整匹配区间；分页只影响逐日列表，不能改变合计或曲线。
         int incomplete=(int)days.stream().filter(d -> !Set.of("COMPLETE","NON_TRADING","BASELINE").contains(d.status())).count();
         BigDecimal known=days.stream().map(Day::knownGain).filter(Objects::nonNull).reduce(BigDecimal::add).orElse(null);
         boolean complete=incomplete==0 && known!=null;
-        var descending=new ArrayList<>(days); Collections.reverse(descending);
+        var descending=new ArrayList<>(days.stream().filter(d -> !"NON_TRADING".equals(d.status())).toList());
+        Collections.reverse(descending);
         int offset=Math.min((page-1)*size,descending.size());
         return new Result(selected,start,end,first,complete ? known : null,known,complete,incomplete,
                 new Page<>(descending.subList(offset,Math.min(offset+size,descending.size())),page,size,descending.size()),days);

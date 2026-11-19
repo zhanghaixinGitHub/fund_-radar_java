@@ -187,6 +187,25 @@ class RuleIntegrationTests {
         assertThrows(IllegalArgumentException.class,()->service.confirm("006730",new ConfirmRequest("CUSTOM",
                 new BigDecimal("0.18"),new BigDecimal("-1.01"),"HOLDING_LOSS")));
     }
+    @Test void single_reminder_can_be_saved_first_and_later_updates_preserve_other_conditions() {
+        var first=service.confirm("006730",new ConfirmRequest("CUSTOM",new BigDecimal("0.15"),null,null)).active();
+        assertEquals(new BigDecimal("0.1500"),first.takeProfitPct());
+        assertNull(first.reduceDrawdownPct());
+        var repeat=service.confirm("006730",new ConfirmRequest("CUSTOM",new BigDecimal("0.15"),null,null)).active();
+        assertEquals(first.ruleId(),repeat.ruleId());
+
+        var withDownside=service.confirm("006730",new ConfirmRequest("CUSTOM",null,new BigDecimal("-0.08"),"DRAWDOWN")).active();
+        assertEquals(first.takeProfitPct(),withDownside.takeProfitPct());
+        assertEquals(new BigDecimal("-0.0800"),withDownside.reduceDrawdownPct());
+        var editedProfit=service.confirm("006730",new ConfirmRequest("CUSTOM",new BigDecimal("0.16"),null,null)).active();
+        assertEquals(withDownside.reduceDrawdownPct(),editedProfit.reduceDrawdownPct());
+        assertEquals("DRAWDOWN",editedProfit.ruleParams().get("downsideBasis"));
+
+        service.revoke("006730");
+        var downsideOnly=service.confirm("006730",new ConfirmRequest("CUSTOM",null,new BigDecimal("-0.09"),"HOLDING_LOSS")).active();
+        assertNull(downsideOnly.takeProfitPct());
+        assertEquals(new BigDecimal("-0.0900"),downsideOnly.reduceDrawdownPct());
+    }
     @Test void cross_user_access_is_rejected() {
         when(client.read("006730")).thenReturn(available(LocalDate.of(2026,9,10),"a"));
         service.generate("006730");

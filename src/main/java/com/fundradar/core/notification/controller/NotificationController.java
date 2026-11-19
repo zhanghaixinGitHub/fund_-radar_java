@@ -8,6 +8,7 @@ import com.fundradar.core.notification.api.NotificationResponse;
 import com.fundradar.core.notification.service.NotificationService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +29,19 @@ public class NotificationController {
 
     public NotificationController(NotificationService notificationService) {
         this.notificationService = notificationService;
+    }
+
+    @GetMapping("/feed")
+    public ApiResponse<NotificationService.FeedPage> feed(
+            @RequestParam(defaultValue = "messages")
+            @Pattern(regexp = "messages|thresholds|events|signals|holding-checks") String category,
+            @RequestParam(defaultValue = "") @Pattern(regexp = "|[0-9]{6}") String fund,
+            @RequestParam(defaultValue = "false") boolean unread,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.NOTIFICATION_SELF_READ);
+        return ApiResponse.success(notificationService.feed(category, fund, unread, page, pageSize));
     }
 
     /** 分页读取当前用户通知。 */

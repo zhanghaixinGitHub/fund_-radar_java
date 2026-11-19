@@ -93,23 +93,21 @@ public class RuleService {
         var draft=repo.latestDraft(user,code);
         if(draft==null && (request==null || !"CUSTOM".equals(request.tier())))
             throw new SimulationException("SIM_INVALID","尚无系统参考，请直接填写并保存提醒数值。");
-        var decided=decide(draft,request);
-        var active=repo.activeRule(user,code);
-        if(active!=null && active.tier().equals(decided.tier())
-                && active.takeProfitPct().compareTo(decided.takeProfit())==0
-                && active.reduceDrawdownPct().compareTo(decided.reduceDrawdown())==0
-                && basis(active.ruleParams()).equals(decided.downsideBasis()))
-            return new RulesView(code,active,repo.ruleHistory(user,code));
-        Instant now=clock.instant();
-        var params=new LinkedHashMap<String,Object>();
-        params.put("sourceTier",request.tier());
-        if(decided.draftProfit()!=null) params.put("draftTakeProfitPct",decided.draftProfit().toPlainString());
-        if(decided.draftReduce()!=null) params.put("draftReduceDrawdownPct",decided.draftReduce().toPlainString());
-        params.put("adjusted",decided.custom());
-        params.put("downsideBasis",decided.downsideBasis());
         RuleView confirmed=tx.execute(status-> {
             repo.lock(user,code);
             var current=repo.activeRule(user,code);
+            var decided=decide(draft,request,current);
+            if(current!=null && current.tier().equals(decided.tier())
+                    && Objects.equals(current.takeProfitPct(),decided.takeProfit())
+                    && Objects.equals(current.reduceDrawdownPct(),decided.reduceDrawdown())
+                    && basis(current.ruleParams()).equals(decided.downsideBasis())) return current;
+            Instant now=clock.instant();
+            var params=new LinkedHashMap<String,Object>();
+            params.put("sourceTier",request.tier());
+            if(decided.draftProfit()!=null) params.put("draftTakeProfitPct",decided.draftProfit().toPlainString());
+            if(decided.draftReduce()!=null) params.put("draftReduceDrawdownPct",decided.draftReduce().toPlainString());
+            params.put("adjusted",decided.custom());
+            params.put("downsideBasis",decided.downsideBasis());
             if(current!=null) repo.supersede(current.ruleId(),now);
             var created=repo.insertRule(user,code,decided.tier(),decided.takeProfit(),decided.reduceDrawdown(),
                     params,"CUSTOM".equals(request.tier())?null:draft.draftId(),now);
@@ -120,10 +118,10 @@ public class RuleService {
     }
     public RulesView revoke(String code) {
         UUID user=writer(); owns(user,code);
-        var active=repo.activeRule(user,code);
-        if(active!=null) tx.execute(status-> {
+        tx.execute(status-> {
             repo.lock(user,code);
-            if(repo.revoke(active.ruleId())) positions.audit(user,"holding-rule-revoke",code+":"+active.ruleId());
+            var active=repo.activeRule(user,code);
+            if(active!=null && repo.revoke(active.ruleId())) positions.audit(user,"holding-rule-revoke",code+":"+active.ruleId());
             return null;
         });
         return new RulesView(code,null,repo.ruleHistory(user,code));
@@ -134,19 +132,24 @@ public class RuleService {
         return params==null?"DRAWDOWN":Objects.toString(params.get("downsideBasis"),"DRAWDOWN");
     }
     /** CUSTOM不依赖系统参考，也不受档位微调限制；标准档位的历史接口仍沿用原±20%约束。 */
-    private static Decision decide(DraftRow draft,ConfirmRequest request) {
+    private static Decision decide(DraftRow draft,ConfirmRequest request,RuleView current) {
         if(request==null || request.tier()==null) throw new IllegalArgumentException("请填写并保存提醒数值。");
         if("CUSTOM".equals(request.tier())) {
-            String basis=request.downsideBasis()==null?"HOLDING_LOSS":request.downsideBasis();
-            if(!Set.of("HOLDING_LOSS","DRAWDOWN").contains(basis))
-                throw new IllegalArgumentException("下跌提醒口径必须是持仓亏损或高点回撤。");
             BigDecimal profit=request.takeProfitPct(),reduce=request.reduceDrawdownPct();
-            if(profit==null || reduce==null) throw new IllegalArgumentException("请填写止盈和下跌提醒数值。");
-            if(profit.signum()<=0 || profit.compareTo(new BigDecimal("10"))>0
-                    || reduce.signum()>=0 || reduce.compareTo(BigDecimal.ONE.negate())<0)
-                throw new IllegalArgumentException("止盈需大于0%且不超过1000%，下跌提醒需在-100%到0%之间。");
-            return new Decision("CUSTOM",profit.setScale(4,RoundingMode.HALF_UP),reduce.setScale(4,RoundingMode.HALF_UP),
-                    null,null,true,basis);
+            if(profit==null && reduce==null) throw new IllegalArgumentException("请填写要保存的提醒数值。");
+            if(profit!=null && (profit.compareTo(new BigDecimal("0.0001"))<0 || profit.compareTo(BigDecimal.TEN)>0)
+                    || reduce!=null && (reduce.compareTo(new BigDecimal("-0.0001"))>0 || reduce.compareTo(BigDecimal.ONE.negate())<0))
+                throw new IllegalArgumentException("止盈需为0.01%到1000%，下跌提醒需为0.01%到100%。");
+            String basis=reduce==null && current!=null ? basis(current.ruleParams())
+                    : Objects.requireNonNullElse(request.downsideBasis(),"HOLDING_LOSS");
+            if(!Set.of("HOLDING_LOSS","DRAWDOWN").contains(basis))
+                throw new IllegalArgumentException("下跌提醒须按持仓亏损或高点回撤计算。");
+            // 只更新本次填写的条件。未设置的另一项保留为空。
+            BigDecimal savedProfit=profit!=null ? profit.setScale(4,RoundingMode.HALF_UP)
+                    : current==null ? null : current.takeProfitPct();
+            BigDecimal savedReduce=reduce!=null ? reduce.setScale(4,RoundingMode.HALF_UP)
+                    : current==null ? null : current.reduceDrawdownPct();
+            return new Decision("CUSTOM",savedProfit,savedReduce,null,null,true,basis);
         }
         if(!TIERS.contains(request.tier())) throw new IllegalArgumentException("系统参考档位不正确。");
         if(!"DRAWDOWN".equals(request.downsideBasis())) throw new IllegalArgumentException("系统参考只适用于高点回撤口径。");

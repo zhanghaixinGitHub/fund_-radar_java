@@ -21,6 +21,7 @@ import static com.fundradar.core.notification.service.ReviewNoticeService.*;
 @Transactional
 class ReviewNoticeIntegrationTests {
     @Autowired ReviewNoticeService service;
+    @Autowired NotificationService notifications;
     @Autowired ReviewNoticeChecker checker;
     @Autowired JdbcClient db;
     UUID user,other;
@@ -62,6 +63,27 @@ class ReviewNoticeIntegrationTests {
         assertThrows(NotificationNotFoundException.class,()->service.history(first.noticeId(),1));
         assertThrows(NotificationNotFoundException.class,()->service.markRead(first.noticeId(),1));
         service.observe(other,input(State.ACTIVE,"另一账号"));assertEquals(1,service.read(1).items().size());
+    }
+
+    @Test void feedCombinesSourcesAndFiltersBeforePaging() {
+        UUID ruleId = rule(true);
+        UUID notificationId = UUID.randomUUID();
+        db.sql("""
+                INSERT INTO notification(notification_id,rule_id,deduplication_key,status,payload,created_at)
+                VALUES(:id,:rule,:key,'READ','{}',CURRENT_TIMESTAMP - INTERVAL '1 day')
+                """).param("id", notificationId).param("rule", ruleId).param("key", notificationId.toString()).update();
+        service.observe(user, input(State.ACTIVE, "原条件"));
+
+        var first = notifications.feed("messages", "", false, 1, 1);
+        assertEquals(2, first.totalCount());
+        assertEquals("holding-checks", first.items().get(0).category());
+        assertEquals(notificationId, notifications.feed("messages", "", false, 2, 1).items().get(0).id());
+        assertEquals(notificationId, notifications.feed("events", "002112", false, 1, 1).items().get(0).id());
+        assertEquals(0, notifications.feed("events", "", true, 1, 1).totalCount());
+        assertEquals(0, notifications.feed("messages", "005284", false, 1, 1).totalCount());
+
+        login(other);
+        assertEquals(0, notifications.feed("messages", "", false, 1, 1).totalCount());
     }
     @Test void requiresAuthAndWritePermission() {
         service.observe(user,input(State.ACTIVE,"条件"));var first=service.read(1).items().get(0);
