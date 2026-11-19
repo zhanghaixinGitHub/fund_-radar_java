@@ -1,9 +1,9 @@
 package com.fundradar.core.notification.api;
 
-import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.Instant;
 import java.util.UUID;
+import java.util.Map;
 
 /** 当前用户可见的一条资讯型提醒通知；不包含其他用户、规则阈值或交易指令。 */
 public record NotificationResponse(
@@ -13,7 +13,7 @@ public record NotificationResponse(
         String triggerType,
         String triggerRef,
         String status,
-        JsonNode payload,
+        Map<String, Object> payload,
         Instant createdAt,
         Instant readAt
 ) {

@@ -25,8 +25,9 @@ public class SimulationController {
         return ApiResponse.success(service.earnings(fundCode,range,startDate,endDate,page,pageSize));
     }
     @GetMapping("/earnings/days/{date}") public ApiResponse<Page<SimulationEarnings.Detail>> earningsDetails(
-            @PathVariable LocalDate date,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize) {
-        return ApiResponse.success(service.earningsDetails(date,page,pageSize));
+            @PathVariable LocalDate date,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="20") int pageSize,
+            @RequestParam(required=false) SimulationEarnings.DetailSort sort) {
+        return ApiResponse.success(service.earningsDetails(date,page,pageSize,sort));
     }
     @GetMapping("/preview/{fundCode}") public ApiResponse<Preview> preview(@PathVariable String fundCode) { return ApiResponse.success(service.preview(fundCode)); }
     @PostMapping("/orders") public ApiResponse<Order> place(@Valid @RequestBody OrderRequest request) { return ApiResponse.success(service.place(request)); }

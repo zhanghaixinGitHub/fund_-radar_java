@@ -16,7 +16,7 @@ public class AlertAvailabilityService {
     }
 
     public AlertAvailabilityResponse current() {
-        // 当前公告核验/检查只覆盖 002112；方向和风险评分消费者尚未接通，不以存在规则推定可用。
-        return new AlertAvailabilityResponse(reviews.getIfAvailable() != null, Set.of("002112"), false, false);
+        boolean enabled = reviews.getIfAvailable() != null;
+        return new AlertAvailabilityResponse(enabled, Set.of(), enabled, enabled);
     }
 }

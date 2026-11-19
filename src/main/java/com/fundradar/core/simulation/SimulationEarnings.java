@@ -27,11 +27,27 @@ public final class SimulationEarnings {
                       @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal knownGain,
                       @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain,
                       @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal knownCumulativeGain) {}
+    public enum DetailSort {
+        MARKET_VALUE_DESC, MARKET_VALUE_ASC, DAILY_GAIN_DESC, DAILY_GAIN_ASC;
+
+        Comparator<Detail> comparator() {
+            return switch (this) {
+                case MARKET_VALUE_DESC -> Comparator.comparing(Detail::marketValue, Comparator.nullsLast(Comparator.reverseOrder()));
+                case MARKET_VALUE_ASC -> Comparator.comparing(Detail::marketValue, Comparator.nullsLast(Comparator.naturalOrder()));
+                case DAILY_GAIN_DESC -> Comparator.comparing(Detail::dailyGain, Comparator.nullsLast(Comparator.reverseOrder()));
+                case DAILY_GAIN_ASC -> Comparator.comparing(Detail::dailyGain, Comparator.nullsLast(Comparator.naturalOrder()));
+            };
+        }
+    }
     public record Detail(String fundCode,String fundName,String status,
                          @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal dailyGain,
-                         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain,String message) {
+                         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal cumulativeGain,String message,
+                         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal marketValue) {
         public Detail(String code,String name,String status,BigDecimal daily,BigDecimal cumulative) {
             this(code,name,status,daily,cumulative,null);
+        }
+        public Detail(String code,String name,String status,BigDecimal daily,BigDecimal cumulative,String message) {
+            this(code,name,status,daily,cumulative,message,null);
         }
     }
     public record Result(Fund fund,LocalDate startDate,LocalDate endDate,LocalDate firstDate,

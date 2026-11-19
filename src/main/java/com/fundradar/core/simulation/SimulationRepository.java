@@ -434,7 +434,7 @@ public class SimulationRepository {
                 r.getBigDecimal(4),r.getBigDecimal(5))).list();
     }
 
-    /** 展开某日时只批量取当前基金页；用户键与基金页均来自服务端，不能按任意用户或全市场代码查询。 */
+    /** 批量读取本人指定日期的估值；基金范围由服务端的账户历史目录确定。 */
     public Map<String,Daily> earningsDetails(UUID user,List<String> codes,LocalDate date) {
         if(codes.isEmpty()) return Map.of();
         var result=new HashMap<String,Daily>();

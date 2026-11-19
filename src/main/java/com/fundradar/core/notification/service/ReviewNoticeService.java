@@ -1,6 +1,6 @@
 package com.fundradar.core.notification.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fundradar.core.auth.CurrentUserContext;
 import com.fundradar.core.auth.PermissionCode;
@@ -21,8 +21,8 @@ public class ReviewNoticeService {
     public record Observation(String businessKey,String scope,String fundCode,String kind,State lifecycle,
                               Map<String,Object> payload,LocalDate validUntil) {}
     public record Notice(UUID noticeId,String scope,String fundCode,String kind,long revision,State lifecycle,
-                         JsonNode payload,Instant createdAt,Instant updatedAt,boolean read) {}
-    public record Revision(long revision,State lifecycle,JsonNode payload,Instant recordedAt) {}
+                         Map<String, Object> payload,Instant createdAt,Instant updatedAt,boolean read) {}
+    public record Revision(long revision,State lifecycle,Map<String, Object> payload,Instant recordedAt) {}
     public record Page<T>(List<T> items,int page,boolean hasMore) {}
     private final JdbcClient db;
     private final ObjectMapper json;
@@ -98,7 +98,7 @@ public class ReviewNoticeService {
                 State.valueOf(r.getString("lifecycle")),decode(r.getString("payload")),r.getTimestamp("created_at").toInstant(),r.getTimestamp("updated_at").toInstant(),r.getLong("read_revision")==r.getLong("revision"));
     }
     private void checkPage(int page) { if(page<1 || page>10000) throw new IllegalArgumentException("页码超出范围。"); }
-    private JsonNode decode(String value) { try { return json.readTree(value); } catch(Exception e) { throw new IllegalStateException("提醒内容暂时无法读取",e); } }
+    private Map<String, Object> decode(String value) { try { return json.readValue(value, new TypeReference<>() {}); } catch(Exception e) { throw new IllegalStateException("提醒内容暂时无法读取",e); } }
     private String encode(Object value) { try { return json.writeValueAsString(value); } catch(Exception e) { throw new IllegalStateException("提醒依据暂时无法核对",e); } }
     private String hash(String value) { try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); } catch(Exception e) { throw new IllegalStateException(e); } }
 }

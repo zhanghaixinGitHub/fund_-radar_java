@@ -25,14 +25,13 @@ class AlertAvailabilityTests {
             verify(service).pageCurrentUserRules(false, 2, 10);
         } finally { CurrentUserContext.clear(); }
     }
-    @Test void availableOnlyWhenCheckerActuallyExistsAndOnlyForCoveredFund() {
+    @Test void availableOnlyWhenCheckerActuallyExists() {
         var beans=new StaticListableBeanFactory();
         var service=new AlertAvailabilityService(beans.getBeanProvider(ReviewNoticeScheduler.class));
         assertFalse(service.current().eventAvailable());
         beans.addBean("reviews",mock(ReviewNoticeScheduler.class));
         assertTrue(service.current().eventAvailable());
-        assertEquals(Set.of("002112"),service.current().eventFundCodes());
-        assertFalse(service.current().signalChangeAvailable());assertFalse(service.current().riskLevelAvailable());
+        assertTrue(service.current().signalChangeAvailable());assertTrue(service.current().riskLevelAvailable());
     }
     @Test void availabilityRequiresSelfReadPermission() {
         var service=mock(AlertAvailabilityService.class);

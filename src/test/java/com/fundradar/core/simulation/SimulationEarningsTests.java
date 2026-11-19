@@ -120,6 +120,27 @@ class SimulationEarningsTests {
         assertEquals(2,result.totalCount()); assertEquals("PENDING",result.items().get(0).status());
         verify(repo).earningsDetails(user,List.of("000002"),date("2026-09-08"));
     }
+    @Test void sortsAllDateDetailsBeforePaginationAndKeepsMissingValuesLast() {
+        var day=date("2026-09-08");
+        when(repo.earningsFunds(user,null)).thenReturn(List.of(
+                fund("000001","2026-09-07","2026-09-08",false),
+                fund("000002","2026-09-07","2026-09-08",false),
+                fund("000003","2026-09-07","2026-09-07",false)));
+        when(repo.earningsDetails(user,List.of("000001","000002","000003"),day)).thenReturn(Map.of(
+                "000001",new Daily(day,money("100"),money("8"),money("-3")),
+                "000002",new Daily(day,money("20"),money("9"),money("2"))));
+
+        assertEquals("000002",service.earningsDetails(day,1,1,DetailSort.DAILY_GAIN_DESC).items().get(0).fundCode());
+        var loss=service.earningsDetails(day,1,1,DetailSort.DAILY_GAIN_ASC).items().get(0);
+        assertEquals("000001",loss.fundCode());
+        assertEquals(money("-3"),loss.dailyGain());
+        assertEquals(money("100"),loss.marketValue());
+        assertEquals("000001",service.earningsDetails(day,1,1,DetailSort.MARKET_VALUE_DESC).items().get(0).fundCode());
+        assertEquals("000002",service.earningsDetails(day,1,1,DetailSort.MARKET_VALUE_ASC).items().get(0).fundCode());
+        var missing=service.earningsDetails(day,3,1,DetailSort.MARKET_VALUE_ASC).items().get(0);
+        assertEquals("000003",missing.fundCode());
+        assertNull(missing.marketValue());
+    }
     @Test void defaultsAndPresetDatesAreStableWithCalendarFailure() {
         when(repo.earningsFunds(user,null)).thenReturn(List.of(fund("000001","2026-01-01","2026-09-29",false)));
         when(repo.earningsAggregates(any(),any(),any(),any())).thenReturn(List.of());

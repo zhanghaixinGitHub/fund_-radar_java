@@ -37,9 +37,17 @@ public class AiSignalClient {
 
     /** 查询一只基金已持久化的评分结果分页；该方法绝不启动模型执行。 */
     public AiSignalPage listSignals(String fundCode, int pageSize, String cursor) {
+        return listSignals(fundCode, pageSize, cursor, false);
+    }
+
+    public AiSignalSummary latestPublishedSignal(String fundCode) {
+        return listSignals(fundCode, 1, null, true).items().stream().findFirst().orElse(null);
+    }
+
+    private AiSignalPage listSignals(String fundCode, int pageSize, String cursor, boolean activeOnly) {
         try {
             AiSignalPage payload = restClient.get()
-                    .uri(uriBuilder -> buildSignalsUri(uriBuilder, fundCode, pageSize, cursor))
+                    .uri(uriBuilder -> buildSignalsUri(uriBuilder, fundCode, pageSize, cursor, activeOnly))
                     .header("X-Service-Token", properties.getToken())
                     .header("X-Trace-Id", TraceContext.getTraceId())
                     .retrieve()
@@ -109,8 +117,9 @@ public class AiSignalClient {
     }
 
     /** 构造评分结果内部接口地址，并仅在游标有效时附加 cursor 参数。 */
-    private URI buildSignalsUri(UriBuilder uriBuilder, String fundCode, int pageSize, String cursor) {
+    private URI buildSignalsUri(UriBuilder uriBuilder, String fundCode, int pageSize, String cursor, boolean activeOnly) {
         uriBuilder.path("/internal/v1/signals").queryParam("fundCode", fundCode).queryParam("pageSize", pageSize);
+        if (activeOnly) uriBuilder.queryParam("activeOnly", true);
         if (StringUtils.hasText(cursor)) {
             uriBuilder.queryParam("cursor", cursor);
         }

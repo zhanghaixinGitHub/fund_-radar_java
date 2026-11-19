@@ -1,10 +1,10 @@
 package com.fundradar.core.notification.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fundradar.core.notification.api.NotificationPageResponse;
 import com.fundradar.core.notification.api.NotificationResponse;
 
 import java.util.UUID;
+import java.util.Map;
 import java.util.List;
 import java.time.Instant;
 
@@ -12,11 +12,21 @@ import java.time.Instant;
 public interface NotificationService {
 
     record FeedItem(UUID id, String fundCode, String kind, String category, Long revision,
-                    String lifecycle, boolean read, Instant occurredAt, JsonNode payload) {}
+                    String lifecycle, boolean read, Instant occurredAt, Map<String, Object> payload) {}
 
     record FeedPage(List<FeedItem> items, int page, long totalCount) {}
 
-    FeedPage feed(String category, String fund, boolean unread, int page, int pageSize);
+    record FeedCell(FeedItem latest, long unreadCount, long messageCount) {}
+
+    record MatrixPage(List<FeedCell> cells, int page, long totalCount) {}
+
+    MatrixPage matrix(String category, String fund, boolean unread, int page, int pageSize);
+
+    default FeedPage feed(String category, String fund, boolean unread, int page, int pageSize) {
+        return feed(category, fund, unread, page, pageSize, false, false);
+    }
+
+    FeedPage feed(String category, String fund, boolean unread, int page, int pageSize, boolean sentOrder, boolean todayOnly);
 
     /** 按创建时间倒序读取当前用户通知。 */
     NotificationPageResponse listCurrentUserNotifications(int page, int pageSize);

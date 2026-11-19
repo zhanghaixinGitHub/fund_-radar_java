@@ -264,15 +264,19 @@ public class SimulationService {
     }
     @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public Page<SimulationEarnings.Detail> earningsDetails(LocalDate date,int page,int size) {
+        return earningsDetails(date,page,size,null);
+    }
+    @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public Page<SimulationEarnings.Detail> earningsDetails(LocalDate date,int page,int size,SimulationEarnings.DetailSort sort) {
         UUID user=reader(); validatePage(page,size);
         LocalDate today=clock.instant().atZone(SimulationCalendar.ZONE).toLocalDate();
         if(date==null || date.isAfter(today) || date.isBefore(LocalDate.of(1900,1,1))) throw new IllegalArgumentException("请选择不晚于今天的有效日期。");
         var funds=earningsCatalog(user,null).stream().filter(f -> !f.firstDate().isAfter(date)).toList();
         int offset=Math.min((page-1)*size,funds.size());
-        var slice=funds.subList(offset,Math.min(offset+size,funds.size()));
-        var values=repo.earningsDetails(user,slice.stream().map(SimulationEarnings.Fund::fundCode).toList(),date);
+        var candidates=sort==null ? funds.subList(offset,Math.min(offset+size,funds.size())) : funds;
+        var values=repo.earningsDetails(user,candidates.stream().map(SimulationEarnings.Fund::fundCode).toList(),date);
         var calendar=earningsCalendar();
-        var details=slice.stream().map(f -> {
+        var details=candidates.stream().map(f -> {
             var d=values.get(f.fundCode());
             if(!SimulationEarnings.sourceContains(f,date)) d=null;
             String status=f.reviewRequired() ? "REVIEW" : date.equals(f.openingDate()) ? "BASELINE"
@@ -281,8 +285,13 @@ public class SimulationService {
             String message="BASELINE".equals(status) ? "从期初持仓开始统计，当天收益不补算。"
                     : f.valuationState()!=null && Set.of("REVIEW","RETRY").contains(f.valuationState().status()) ? f.valuationState().message() : null;
             return new SimulationEarnings.Detail(f.fundCode(),f.fundName(),status,
-                    "COMPLETE".equals(status) ? d.dailyGain() : null,d==null || f.reviewRequired() ? null : d.cumulativeGain(),message);
+                    "COMPLETE".equals(status) ? d.dailyGain() : null,d==null || f.reviewRequired() ? null : d.cumulativeGain(),
+                    message,d==null || f.reviewRequired() ? null : d.marketValue());
         }).toList();
+        if(sort!=null) {
+            details=details.stream().sorted(sort.comparator().thenComparing(SimulationEarnings.Detail::fundCode))
+                    .skip(offset).limit(size).toList();
+        }
         return new Page<>(details,page,size,funds.size());
     }
     public Page<Period> periods(UUID id,int page,int size) { validatePage(page,size); return repo.periods(reader(),id,page,size); }

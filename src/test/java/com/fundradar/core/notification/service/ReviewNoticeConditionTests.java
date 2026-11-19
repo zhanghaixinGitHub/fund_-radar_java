@@ -32,11 +32,11 @@ class ReviewNoticeConditionTests {
         var item=new FundNewsFactsResponse.Item("a".repeat(64),"公司股权激励草案","巨潮资讯",
                 "https://static.cninfo.com.cn/finalpage/2026-09-29/123.PDF","2026-09-29",
                 "2026-09-29T18:00:00+08:00","已披露文件","尚待核实是否实施","见6月30日披露持仓","b".repeat(64));
-        var observation=ReviewNoticeChecker.publication(UUID.randomUUID(),item,LocalDate.of(2026,9,29));
+        var observation=ReviewNoticeChecker.publication(UUID.randomUUID(),"002112",item,LocalDate.of(2026,9,29));
         assertNotNull(observation);assertEquals("已披露文件",observation.payload().get("stage"));
         var wrong=new FundNewsFactsResponse.Item(item.eventId(),item.title(),item.sourceName(),
                 "https://static.cninfo.com.cn.example.com/finalpage/2026-09-29/123.PDF",item.publishedDate(),
                 item.firstReceivedAt(),item.stage(),item.summary(),item.relation(),item.evidenceHash());
-        assertNull(ReviewNoticeChecker.publication(UUID.randomUUID(),wrong,LocalDate.of(2026,9,29)));
+        assertNull(ReviewNoticeChecker.publication(UUID.randomUUID(),"002112",wrong,LocalDate.of(2026,9,29)));
     }
 }

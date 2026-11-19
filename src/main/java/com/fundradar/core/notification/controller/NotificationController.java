@@ -35,13 +35,28 @@ public class NotificationController {
     public ApiResponse<NotificationService.FeedPage> feed(
             @RequestParam(defaultValue = "messages")
             @Pattern(regexp = "messages|thresholds|events|signals|holding-checks") String category,
-            @RequestParam(defaultValue = "") @Pattern(regexp = "|[0-9]{6}") String fund,
+            @RequestParam(defaultValue = "") @Pattern(regexp = "|[0-9]{6}|account") String fund,
             @RequestParam(defaultValue = "false") boolean unread,
+            @RequestParam(defaultValue = "false") boolean sentOrder,
+            @RequestParam(defaultValue = "false") boolean todayOnly,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize
     ) {
         CurrentUserContext.requirePermission(PermissionCode.NOTIFICATION_SELF_READ);
-        return ApiResponse.success(notificationService.feed(category, fund, unread, page, pageSize));
+        return ApiResponse.success(notificationService.feed(category, fund, unread, page, pageSize, sentOrder, todayOnly));
+    }
+
+    @GetMapping("/matrix")
+    public ApiResponse<NotificationService.MatrixPage> matrix(
+            @RequestParam(defaultValue = "messages")
+            @Pattern(regexp = "messages|thresholds|events|signals|holding-checks") String category,
+            @RequestParam(defaultValue = "") @Pattern(regexp = "|[0-9]{6}") String fund,
+            @RequestParam(defaultValue = "false") boolean unread,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int pageSize
+    ) {
+        CurrentUserContext.requirePermission(PermissionCode.NOTIFICATION_SELF_READ);
+        return ApiResponse.success(notificationService.matrix(category, fund, unread, page, pageSize));
     }
 
     /** 分页读取当前用户通知。 */

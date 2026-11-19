@@ -1,7 +1,7 @@
 package com.fundradar.core.notification.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fundradar.core.auth.AuthenticatedUser;
 import com.fundradar.core.auth.CurrentUserContext;
@@ -35,48 +35,93 @@ public class JdbcNotificationService implements NotificationService {
                 SELECT n.notification_id AS id, r.fund_code, r.rule_type AS kind,
                        CASE WHEN r.rule_type = 'EVENT' THEN 'events' ELSE 'signals' END AS category,
                        NULL::bigint AS revision, NULL::text AS lifecycle, n.status = 'READ' AS is_read,
-                       n.created_at AS occurred_at, n.payload
+                       n.created_at AS occurred_at, n.created_at AS sent_at, n.payload
                 FROM notification n JOIN alert_rule r ON r.rule_id = n.rule_id
                 WHERE r.user_id = :userId
                 UNION ALL
                 SELECT review.notice_id, review.fund_code, review.kind,
                        CASE WHEN review.kind = 'FUND_PUBLICATION' THEN 'events'
+                            WHEN review.kind IN ('SIGNAL_CHANGE', 'RISK_LEVEL') THEN 'signals'
                             WHEN review.kind IN ('TAKE_PROFIT', 'HOLDING_LOSS', 'DRAWDOWN') THEN 'thresholds'
                             ELSE 'holding-checks' END,
                        review.revision, review.lifecycle, review.read_revision = review.revision,
-                       review.updated_at, review.payload
+                       review.updated_at, review.created_at, review.payload
                 FROM review_notice review
                 WHERE review.user_id = :userId
             ), filtered AS (
                 SELECT * FROM messages
                 WHERE (:category = 'messages' OR category = :category)
-                  AND (:fund = '' OR fund_code = :fund)
+                  AND (:fund = '' OR coalesce(fund_code, 'account') = :fund)
                   AND (NOT :unread OR NOT is_read)
+                  AND (NOT :todayOnly OR (
+                      sent_at >= (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')
+                      AND sent_at < ((date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai') + INTERVAL '1 day') AT TIME ZONE 'Asia/Shanghai')
+                  ))
             )
             """;
 
     @Override
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public FeedPage feed(String category, String fund, boolean unread, int page, int pageSize) {
+        return feed(category, fund, unread, page, pageSize, false, false);
+    }
+
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public FeedPage feed(String category, String fund, boolean unread, int page, int pageSize, boolean sentOrder, boolean todayOnly) {
         var filters = Map.of("userId", CurrentUserContext.require().userId(),
-                "category", category, "fund", fund, "unread", unread);
+                "category", category, "fund", fund, "unread", unread, "todayOnly", todayOnly);
         long total = jdbcClient.sql(FILTERED_FEED + "SELECT count(*) FROM filtered")
                 .params(filters).query(Long.class).single();
         int actualPage = (int) Math.min(page, Math.max(1, (total + pageSize - 1) / pageSize));
         var items = jdbcClient.sql(FILTERED_FEED + """
-                SELECT * FROM filtered ORDER BY occurred_at DESC, id DESC
+                SELECT id, fund_code, kind, category, revision, lifecycle, is_read, payload,
+                       CASE WHEN :sentOrder THEN sent_at ELSE occurred_at END AS display_time
+                FROM filtered ORDER BY display_time DESC, id DESC
                 LIMIT :pageSize OFFSET :offset
-                """).params(filters).param("pageSize", pageSize).param("offset", (long) (actualPage - 1) * pageSize)
-                .query((row, index) -> new FeedItem(row.getObject("id", UUID.class), row.getString("fund_code"),
-                        row.getString("kind"), row.getString("category"), row.getObject("revision", Long.class),
-                        row.getString("lifecycle"), row.getBoolean("is_read"),
-                        row.getTimestamp("occurred_at").toInstant(), readPayload(row))).list();
+                """).params(filters).param("sentOrder", sentOrder).param("pageSize", pageSize).param("offset", (long) (actualPage - 1) * pageSize)
+                .query((row, index) -> mapFeedItem(row, "display_time")).list();
         return new FeedPage(items, actualPage, total);
     }
 
-    private JsonNode readPayload(ResultSet row) throws SQLException {
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public MatrixPage matrix(String category, String fund, boolean unread, int page, int pageSize) {
+        var filters = Map.of("userId", CurrentUserContext.require().userId(),
+                "category", category, "fund", fund, "unread", unread, "todayOnly", true);
+        long total = jdbcClient.sql(FILTERED_FEED + """
+                SELECT count(*) FROM (SELECT fund_code FROM filtered GROUP BY fund_code) AS funds
+                """).params(filters).query(Long.class).single();
+        int actualPage = (int) Math.min(page, Math.max(1, (total + pageSize - 1) / pageSize));
+        var cells = jdbcClient.sql(FILTERED_FEED + """
+                , funds AS (
+                    SELECT fund_code, max(occurred_at) AS latest_at
+                    FROM filtered GROUP BY fund_code
+                    ORDER BY latest_at DESC, fund_code NULLS FIRST LIMIT :pageSize OFFSET :offset
+                ), ranked AS (
+                    SELECT f.*, funds.latest_at,
+                           row_number() OVER (cell ORDER BY f.occurred_at DESC, f.id DESC) AS position,
+                           count(*) OVER (cell) AS message_count,
+                           count(*) FILTER (WHERE NOT f.is_read) OVER (cell) AS unread_count
+                    FROM filtered f JOIN funds ON f.fund_code IS NOT DISTINCT FROM funds.fund_code
+                    WINDOW cell AS (PARTITION BY f.fund_code, f.category)
+                )
+                SELECT * FROM ranked WHERE position=1 ORDER BY latest_at DESC, fund_code NULLS FIRST, category
+                """).params(filters).param("pageSize", pageSize).param("offset", (long) (actualPage - 1) * pageSize)
+                .query((row, index) -> new FeedCell(mapFeedItem(row, "occurred_at"), row.getLong("unread_count"), row.getLong("message_count"))).list();
+        return new MatrixPage(cells, actualPage, total);
+    }
+
+    private FeedItem mapFeedItem(ResultSet row, String timeColumn) throws SQLException {
+        return new FeedItem(row.getObject("id", UUID.class), row.getString("fund_code"),
+                row.getString("kind"), row.getString("category"), row.getObject("revision", Long.class),
+                row.getString("lifecycle"), row.getBoolean("is_read"),
+                row.getTimestamp(timeColumn).toInstant(), readPayload(row));
+    }
+
+    private Map<String, Object> readPayload(ResultSet row) throws SQLException {
         try {
-            return objectMapper.readTree(row.getString("payload"));
+            return objectMapper.readValue(row.getString("payload"), new TypeReference<>() {});
         } catch (JsonProcessingException exception) {
             throw new SQLException("notification payload is not valid JSON", exception);
         }

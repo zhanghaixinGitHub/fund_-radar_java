@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.*;
 import java.util.*;
+import java.util.function.Function;
 import static com.fundradar.core.notification.service.ReviewNoticeService.*;
 
 /** 依据已确认条件与公共事实生成复查事项。未知历史回撤不触发损失提醒，模拟与本人确认持仓分开。 */
@@ -27,12 +28,53 @@ public class ReviewNoticeChecker {
         return db.sql("""
             SELECT user_id FROM user_account u WHERE status='ACTIVE' AND user_id>:after AND (
                 EXISTS(SELECT 1 FROM account_funding_preference p WHERE p.user_id=u.user_id)
-                OR EXISTS(SELECT 1 FROM alert_rule r WHERE r.user_id=u.user_id AND r.rule_type='EVENT' AND r.fund_code='002112')
+                OR EXISTS(SELECT 1 FROM alert_rule r JOIN watchlist_item w
+                          ON w.user_id=r.user_id AND w.fund_code=r.fund_code WHERE r.user_id=u.user_id AND r.enabled)
+                OR EXISTS(SELECT 1 FROM holding_rule_profile h WHERE h.user_id=u.user_id AND h.status='ACTIVE')
                 OR EXISTS(SELECT 1 FROM review_notice n WHERE n.user_id=u.user_id)) ORDER BY user_id LIMIT 200
             """).param("after",after).query(UUID.class).list();
     }
     @Transactional
     public int check(UUID user,FundNewsFactsResponse news,LocalDate today) {
+        return checkWithNews(user, code -> news != null && code.equals(news.fundCode()) ? news : null, today, true);
+    }
+
+    @Transactional
+    public int checkWithNews(UUID user, Function<String, FundNewsFactsResponse> readNews, LocalDate today, boolean accountDates) {
+        int changed = accountDates ? checkAccountDates(user, today) : 0;
+        // 锁住本次采用的订阅和关注关系直到消息写入结束，关闭/取消关注成功后不会再按旧状态投递。
+        // 不删除规则，因此重新关注时仍记得用户曾手动关闭哪类提醒。
+        var rules=db.sql("""
+                SELECT rule.rule_id, rule.fund_code FROM alert_rule rule
+                JOIN watchlist_item item ON item.user_id=rule.user_id AND item.fund_code=rule.fund_code
+                WHERE rule.user_id=:user AND rule.rule_type='EVENT' AND rule.enabled=true
+                FOR SHARE OF rule, item
+                """)
+                .param("user",user).query((r,n)->new EventRule(r.getObject(1,UUID.class),r.getString(2))).list();
+        for (var rule : rules) {
+            var news = readNews.apply(rule.code());
+            if (news == null || !rule.code().equals(news.fundCode()) || news.items() == null) continue;
+            for (var item : news.items()) {
+                var observation = publication(rule.id(), rule.code(), item, today);
+                if (observation != null) changed += notices.observe(user, observation) ? 1 : 0;
+            }
+        }
+        // 来源读取失败不撤销事实。窗口到期由原保存日期决定；订阅停用只撤销本条提醒，不宣称事件消失。
+        var stored=db.sql("SELECT business_key,scope,fund_code,kind,lifecycle,payload,valid_until FROM review_notice WHERE user_id=:user AND kind='FUND_PUBLICATION' AND lifecycle='ACTIVE' ORDER BY notice_id LIMIT 1001")
+                .param("user",user).query((r,n)->new Observation(r.getString("business_key"),r.getString("scope"),r.getString("fund_code"),r.getString("kind"),
+                        State.valueOf(r.getString("lifecycle")),decode(r.getString("payload")),r.getObject("valid_until",LocalDate.class))).list();
+        if(stored.size()>1000) throw new IllegalStateException("单人待复查事项超出当前处理上限");
+        for(Observation old:stored) {
+            boolean enabled=rules.stream().anyMatch(rule->old.businessKey().startsWith("publication:"+rule.id()+":"));
+            State next=!enabled?State.RETRACTED:old.validUntil()!=null && today.isAfter(old.validUntil())?State.EXPIRED:null;
+            if(next==null) continue;
+            Map<String,Object> payload=new TreeMap<>(old.payload());
+            payload.put("changeExplanation",!enabled?"你已关闭这类提醒或取消关注；原事实和历史仍保留。":"这条消息已结束30天信息观察窗口；不代表风险消失。");
+            changed+=notices.observe(user,new Observation(old.businessKey(),null,old.fundCode(),old.kind(),next,payload,old.validUntil()))?1:0;
+        }
+        return changed;
+    }
+    private int checkAccountDates(UUID user, LocalDate today) {
         int changed=0;
         for(Scope scope:List.of(Scope.SIMULATED)) {
             View value=funding.current(user,scope);
@@ -43,36 +85,9 @@ public class ReviewNoticeChecker {
             }
         }
         for(String kind:List.of("USE_DATE","REVIEW_DUE")) changed+=closeAccount(user,Scope.CONFIRMED,kind,null,"已统一使用当前我的持仓资金安排；旧范围提醒停止，历史记录保留。")?1:0;
-        // 锁住本次采用的订阅和关注关系直到消息写入结束，关闭/取消关注成功后不会再按旧状态投递。
-        // 不删除规则，因此重新关注时仍记得用户曾手动关闭哪类提醒。
-        List<UUID> rules=db.sql("""
-                SELECT rule.rule_id FROM alert_rule rule
-                JOIN watchlist_item item ON item.user_id=rule.user_id AND item.fund_code=rule.fund_code
-                WHERE rule.user_id=:user AND rule.fund_code='002112' AND rule.rule_type='EVENT' AND rule.enabled=true
-                FOR SHARE OF rule, item
-                """)
-                .param("user",user).query(UUID.class).list();
-        if(news!=null && "002112".equals(news.fundCode()) && news.items()!=null && news.items().size()<=50) {
-            for(UUID rule:rules) for(var item:news.items()) {
-                Observation observation=publication(rule,item,today);
-                if(observation!=null) changed+=notices.observe(user,observation)?1:0;
-            }
-        }
-        // 来源读取失败不撤销事实。窗口到期由原保存日期决定；订阅停用只撤销本条提醒，不宣称事件消失。
-        var stored=db.sql("SELECT business_key,scope,fund_code,kind,lifecycle,payload,valid_until FROM review_notice WHERE user_id=:user AND kind='FUND_PUBLICATION' AND lifecycle='ACTIVE' ORDER BY notice_id LIMIT 1001")
-                .param("user",user).query((r,n)->new Observation(r.getString("business_key"),r.getString("scope"),r.getString("fund_code"),r.getString("kind"),
-                        State.valueOf(r.getString("lifecycle")),decode(r.getString("payload")),r.getObject("valid_until",LocalDate.class))).list();
-        if(stored.size()>1000) throw new IllegalStateException("单人待复查事项超出当前处理上限");
-        for(Observation old:stored) {
-            boolean enabled=rules.stream().anyMatch(rule->old.businessKey().startsWith("publication:"+rule+":"));
-            State next=!enabled?State.RETRACTED:old.validUntil()!=null && today.isAfter(old.validUntil())?State.EXPIRED:null;
-            if(next==null) continue;
-            Map<String,Object> payload=new TreeMap<>(old.payload());
-            payload.put("changeExplanation",!enabled?"你已关闭这类提醒或取消关注；原事实和历史仍保留。":"这条消息已结束30天信息观察窗口；不代表风险消失。");
-            changed+=notices.observe(user,new Observation(old.businessKey(),null,old.fundCode(),old.kind(),next,payload,old.validUntil()))?1:0;
-        }
         return changed;
     }
+
     /** 本人重确认开启新的复查间隔；未知、撤销和将来到期只更新已有提醒，不制造未发生事项。 */
     static Observation account(Scope scope,String kind,View value,LocalDate today) {
         if(value==null || !"ACTIVE".equals(value.status()) || value.input()==null) return null;
@@ -100,7 +115,9 @@ public class ReviewNoticeChecker {
         return notices.observe(user,new Observation("account:"+scope+":"+kind,scope.name(),null,kind,State.RETRACTED,payload,null));
     }
     /** 公告只是公开事实；稳定原文摘要用于去重，取得时间变动不制造第二次提醒。 */
-    static Observation publication(UUID rule,FundNewsFactsResponse.Item item,LocalDate today) {
+    private record EventRule(UUID id, String code) {}
+
+    static Observation publication(UUID rule, String code, FundNewsFactsResponse.Item item, LocalDate today) {
         if(item==null || item.eventId()==null || !item.eventId().matches("[a-f0-9]{64}") || item.evidenceHash()==null || !item.evidenceHash().matches("[a-f0-9]{64}") || !"已披露文件".equals(item.stage())) return null;
         try {
             LocalDate published=LocalDate.parse(item.publishedDate());
@@ -111,14 +128,14 @@ public class ReviewNoticeChecker {
                     || ("static.cninfo.com.cn".equals(uri.getHost())
                         && uri.getPath()!=null && uri.getPath().matches("/finalpage/[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]+\\.[pP][dD][fF]"));
             if(published.isAfter(today) || today.isAfter(until) || !"https".equals(uri.getScheme())
-                    || uri.getUserInfo()!=null || !official) return null;
+                    || uri.getUserInfo()!=null || uri.getHost()==null || ("002112".equals(code) && !official)) return null;
             Map<String,Object> payload=new TreeMap<>();
             payload.put("title",item.title());payload.put("explanation",item.summary());payload.put("basisDate",item.publishedDate());
             payload.put("sourceName",item.sourceName());payload.put("sourceUrl",item.sourceUrl());payload.put("stage",item.stage());
             payload.put("relation",item.relation());payload.put("evidenceHash",item.evidenceHash());
-            payload.put("destination","/funds/002112?section=documents");
+            payload.put("destination","/funds/"+code+"?section=documents");
             payload.put("limitation","文件披露不等于风险已形成或解除；本事项未进入当前涨跌预测。");
-            return new Observation("publication:"+rule+":"+item.eventId(),null,"002112","FUND_PUBLICATION",State.ACTIVE,payload,until);
+            return new Observation("publication:"+rule+":"+item.eventId(),null,code,"FUND_PUBLICATION",State.ACTIVE,payload,until);
         } catch(RuntimeException ex) { return null; } // 无法核验的事实不发布，也不改写已有提醒。
     }
     private Map<String,Object> decode(String value) {
