@@ -63,6 +63,19 @@ class PredictionReviewV2Tests {
         var expected=view();when(client.get("/funds/013330/review-v2")).thenReturn(expected);
         assertEquals(expected,service.reviewV2("013330"));verifyNoInteractions(database);
     }
+    @Test void currentWindowRequiresOwnershipAndCanShowDatesWithoutAReview() throws Exception {
+        assertThrows(AuthenticationRequiredException.class,()->service.currentForecast("013330"));
+        login(false);
+        assertThrows(NoSuchElementException.class,()->service.currentForecast("013330"));
+        verifyNoInteractions(client,database);
+        when(scope.follows(user,"013330")).thenReturn(true);
+        var expected=json.readTree("""
+          {"fundCode":"013330","window":{"nextWindowOpenAt":"2026-11-26T00:00:00+08:00","periods":[]},"review":null}
+          """);
+        when(client.get("/funds/013330/review-v2/current-window")).thenReturn(expected);
+        assertEquals(expected,service.currentForecast("013330"));
+        verifyNoInteractions(database);
+    }
     @Test void absentAndWrongFundAndDuplicatePeriodStayDistinct() throws Exception {
         login(false);when(scope.follows(user,"013330")).thenReturn(true);
         when(client.get("/funds/013330/review-v2")).thenReturn(json.nullNode());

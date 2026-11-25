@@ -17,6 +17,8 @@ public class MultiPredictionController {
     @GetMapping("/watchlist/{code}/predictions/review-v2") public ApiResponse<?> reviewV2(@PathVariable String code) {
         return ok(service.reviewV2(code));
     }
+    @GetMapping("/watchlist/{code}/predictions/review-v2/current-window")
+    public ApiResponse<?> currentForecast(@PathVariable String code) { return ok(service.currentForecast(code)); }
     @PostMapping("/watchlist/{code}/predictions/review-v2/generate")
     public ApiResponse<?> refreshReviewV2(@PathVariable String code,@RequestBody(required=false) Map<String,Object> body) {
         empty(body); return ok(service.refreshReviewV2(code));

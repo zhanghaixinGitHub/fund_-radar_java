@@ -69,7 +69,18 @@ public class MultiPredictionService {
     /** 正式采用后的四周期分析独立读取，不把复盘、条件意见写成事前预测引用。 */
     public JsonNode reviewV2(String code) {
         owns(user(false),code);
-        var value=client.get("/funds/"+code+"/review-v2");
+        return checkedReview(code,client.get("/funds/"+code+"/review-v2"));
+    }
+    public JsonNode currentForecast(String code) {
+        owns(user(false),code);
+        var value=client.get("/funds/"+code+"/review-v2/current-window");
+        if(value==null || !code.equals(value.path("fundCode").asText()) || !value.path("window").isObject()
+                || !value.path("window").path("periods").isArray() || !value.has("review"))
+            throw new IllegalStateException("当前预测日期与基金不一致");
+        checkedReview(code,value.get("review"));
+        return value;
+    }
+    private JsonNode checkedReview(String code,JsonNode value) {
         if(value==null || value.isNull()) return null;
         if(!code.equals(value.path("fundCode").asText()) || !value.path("periods").isArray()
                 || value.path("periods").size()!=4) throw new IllegalStateException("第二版分析与当前基金不一致");
